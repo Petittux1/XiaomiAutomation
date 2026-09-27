@@ -108,6 +108,36 @@ done
 # 设备档案模板必须是「不覆盖」状态: 装了包的新用户不该一上来就被别的机型参数接管。
 grep -qE '^DEV_APPLY=0$' "$STAGE/device.conf" || {
   echo "构建失败: device.conf 模板的 DEV_APPLY 必须是 0(17 Pro 基线)" >&2; exit 1; }
+# ---------- module.prop 自检 ----------
+# description 是单行属性(readProperty 按第一个 = 切开、且不处理转义), 写多行
+# 会被后面的行当成新键丢掉。这里把「中文优先、再英文」钉成断言。
+# 注意别用 grep '[一-鿿]' 这类字符类: Termux 下 LANG 常常是空的, 它会退化成
+# 逐字节匹配; wc -m 也会退化成 wc -c。改成按字面量标识串判断, 与 locale 无关。
+n_desc=$(grep -c '^description=' "$STAGE/module.prop")
+[ "$n_desc" = "1" ] || { echo "构建失败: module.prop 里 description 必须恰好一行" >&2; exit 1; }
+DESC=$(sed -n 's/^description=//p' "$STAGE/module.prop")
+[ -n "$DESC" ] || { echo "构建失败: module.prop 的 description 为空" >&2; exit 1; }
+case "$DESC" in
+  *" | "*) : ;;
+  *) echo "构建失败: description 缺 ' | ' 分隔符(应为 中文段 | 英文段)" >&2; exit 1 ;;
+esac
+# 「中文优先」= 中文段在分隔符之前, 英文段在之后。两段各自都得是真内容,
+# 不能把英文段塞到前面、或者让其中一段退化成空壳。
+ZH_PART=${DESC%%" | "*}
+EN_PART=${DESC#*" | "}
+zh_ok=0; for m in 自动化模块 定时 录制 回放 浇水; do
+  case "$ZH_PART" in *"$m"*) zh_ok=1 ;; esac
+done
+[ "$zh_ok" = 1 ] || { echo "构建失败: description 的中文段里找不到中文标识串" >&2; exit 1; }
+en_ok=0; for m in automation scheduler record replay WebUI; do
+  case "$EN_PART" in *"$m"*) en_ok=1 ;; esac
+done
+[ "$en_ok" = 1 ] || { echo "构建失败: description 的英文段里找不到英文标识串" >&2; exit 1; }
+# 模块列表里 description 会被折行/截断, 太长等于没写。LANG 为空时 wc -m == wc -c,
+# 所以这里就用字节数, 阈值按「中英两段都留得住」定。
+dlen=$(printf '%s' "$DESC" | wc -c)
+[ "$dlen" -le 1100 ] || {
+  echo "构建失败: module.prop 的 description 太长($dlen 字节, 列表里会被截断)" >&2; exit 1; }
 # 明文 PIN / 密钥不得出现在包内任何文件
 if grep -rIlE '(api[_-]?key|secret[_-]?key|bearer +[A-Za-z0-9]|BEGIN +RSA)' "$STAGE" 2>/dev/null | grep -q .; then
   echo "构建失败: 产物里出现疑似密钥" >&2; exit 1
@@ -122,6 +152,36 @@ for pair in "README.md:README.en.md README.fr.md README.ru.md" \
   for other in ${pair#*:}; do
     grep -qF "$other" "$STAGE/$src" || { echo "构建失败: $src 缺少指向 $other 的链接" >&2; exit 1; }
   done
+done
+
+# ---------- README 里的 webctl.sh 示例必须真的能跑 ----------
+# 文档里写错的命令比没有文档更糟: 用户照抄就失败。四份 README 都会给出
+# webctl.sh 的命令行示例(Magisk / APatch 下没有 WebUI, 只能这么配), 所以
+# 在产物上逐份核对。注意要「逐份」而不是把四份合起来看一次 —— 合并会让其中
+# 一份丢了示例也照样通过, 翻译就悄悄退化成不给 Magisk 用户留路了。
+DOCS="README.md README.en.md README.fr.md README.ru.md"
+for src in $DOCS; do
+  subs=$(grep -hoE 'webctl\.sh [a-z]+' "$STAGE/$src" | awk '{print $2}' | sort -u)
+  [ -n "$subs" ] || {
+    echo "构建失败: $src 里没有 webctl.sh 用法示例(与 Magisk 兼容性说明不一致)" >&2; exit 1; }
+  for s in $subs; do
+    grep -qE "^  $s\)" "$STAGE/webctl.sh" || {
+      echo "构建失败: $src 用了 webctl.sh $s, 但 webctl.sh 里没有这个子命令" >&2; exit 1; }
+  done
+  # setpin 只认 WEBUI_PIN 环境通道(webctl.sh 里 V=\$WEBUI_PIN), 写成 setpin 123456
+  # 必然失败, 而且明文 PIN 会进进程列表 —— 两条都不能出现在文档里。
+  if grep -qE 'webctl\.sh setpin +[0-9]' "$STAGE/$src"; then
+    echo "构建失败: $src 里 setpin 带了位置参数(必须走 WEBUI_PIN 环境变量)" >&2; exit 1
+  fi
+  # settime 是唯一带取值的示例子命令, 只收 4 位 HHMM 且 HH<=23 / MM<=59
+  # (webctl.sh 里就是这两条范围检查, 越界直接 ERR invalid HHMM)。
+  if grep -oE "webctl\.sh settime +[^' ]+" "$STAGE/$src" \
+       | grep -qvE 'settime +(0[0-9]|1[0-9]|2[0-3])([0-5][0-9])$'; then
+    echo "构建失败: $src 里 webctl.sh settime 的参数不是合法的 4 位 HHMM" >&2; exit 1
+  fi
+  # 说清 WebUI 只在 KernelSU 下可用 —— Magisk / APatch 用户直接看这张表
+  grep -qF 'kernelsu.js' "$STAGE/$src" || {
+    echo "构建失败: $src 的运行环境说明里没提 kernelsu.js 依赖" >&2; exit 1; }
 done
 
 echo "已生成: $OUT"

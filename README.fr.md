@@ -27,9 +27,33 @@ Il fonctionne par **contrôle root direct** (`screencap` / `getevent` / `sendeve
 - **Une interface plus aérée** : un résumé d'état en haut, tout le détail rangé dans des sections repliables, pour que le premier écran ne soit plus un mur de formulaire ; tout déplier / tout replier en un geste.
 - Le code PIN n'est écrit que dans la configuration locale et n'apparaît jamais dans l'état, le journal ni le code source.
 
+## Environnement requis
+
+Le module n'utilise que les points d'entrée standard `customize.sh` + `service.sh` : **ni Zygisk, ni modification de `/system`, ni metamodule requis**. La planification, l'enregistrement/relecture et le déverrouillage PIN fonctionnent donc aussi sous Magisk / APatch.
+
+En revanche, **le WebUI dépend du pont `kernelsu.js` injecté par KernelSU**, que Magisk / APatch ne fournissent pas :
+
+| Fonctionnalité | KernelSU | Magisk / APatch |
+| --- | :---: | :---: |
+| Planification / enregistrement / relecture / déverrouillage PIN | ✅ | ✅ |
+| WebUI du module | ✅ | ❌ (utilisez `webctl.sh` ci-dessous) |
+
+Sous Magisk / APatch, pilotez le même backend depuis un shell root via `webctl.sh` :
+
+```sh
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh status'
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh settime 0730'
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh trigger'      # lance immédiatement la tâche intégrée
+su -c 'WEBUI_PIN=123456 sh /data/adb/modules/icbc_daily_water/webctl.sh setpin'
+```
+
+Le code PIN n'est Deliberément accepté **que via la variable d'environnement `WEBUI_PIN`**, jamais en argument de ligne de commande, afin que le texte en clair n'apparaisse jamais dans la liste des processus. Tapez cette dernière ligne à la main dans un terminal local — ne la mettez ni dans un script, ni dans un alias, ni dans une discussion.
+
+La liste complète des sous-commandes figure en en-tête du fichier : `webctl.sh status|setpin|settime|setenable|setmode|setopen|setsleep|setwatch|setcleanup|trigger[NAME]|restart|log|profiles|profile add/del/set|record start/stop/status`.
+
 ## Installation
 
-1. Téléchargez `xiaomi-17-pro-automation-v0.12.1.zip` depuis les Releases.
+1. Téléchargez `xiaomi-17-pro-automation-v0.12.2.zip` depuis les Releases.
 2. Flashez ce zip dans KernelSU / Magisk.
 3. Redémarrez, ouvrez le WebUI du module et réglez la méthode de déverrouillage et le code PIN selon vos besoins.
 4. Pour une tâche enregistrée, renseignez le nom de package de l'application cible ; basculez vers cette application et appuyez sur « Démarrer l'enregistrement », puis sur « Arrêter l'enregistrement » lorsque vous avez terminé.
@@ -46,7 +70,7 @@ id=icbc_daily_water
 
 Ne supprimez pas ces répertoires et ne modifiez pas l'identifiant du module ; votre configuration, vos profils, votre code PIN et vos actions enregistrées sont conservés.
 
-> Si le WebUI semble encore obsolète après la mise à jour, vérifiez la version en haut à droite : elle doit indiquer `v0.12.1`. Sinon, l'ancien paquet a été installé.
+> Si le WebUI semble encore obsolète après la mise à jour, vérifiez la version en haut à droite : elle doit indiquer `v0.12.2`. Sinon, l'ancien paquet a été installé.
 
 ## Utilisation
 
@@ -137,7 +161,7 @@ bash tools/build_zip.sh
 Le script écrit le fichier suivant dans le répertoire parent :
 
 ```text
-xiaomi-17-pro-automation-v0.12.1.zip
+xiaomi-17-pro-automation-v0.12.2.zip
 ```
 
 ## Licence

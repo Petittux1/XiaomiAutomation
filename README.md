@@ -27,9 +27,33 @@
 - **界面清爽**：概览区一眼看状态，细节收进可折叠分组，首屏不再是一大坨表单；「展开全部 / 收起全部」一键切换。
 - PIN 只写入本机配置，不在状态接口、运行日志或源码中出现明文。
 
+## 运行环境
+
+模块只用到标准的 `customize.sh` + `service.sh` 入口：**不含 Zygisk、不改 `/system`、不需要 metamodule**。所以在 Magisk / APatch 下定时调度、录制回放、PIN 自动解锁都能正常跑。
+
+但 **WebUI 依赖 KernelSU 注入的 `kernelsu.js` 桥**，Magisk / APatch 不提供这个桥：
+
+| 功能 | KernelSU | Magisk / APatch |
+| --- | :---: | :---: |
+| 定时调度 / 录制 / 回放 / PIN 自动解锁 | ✅ | ✅ |
+| 模块 WebUI | ✅ | ❌（用下面的 `webctl.sh`） |
+
+在 Magisk / APatch 下想改配置，用 root shell 直接调 `webctl.sh`（与 WebUI 完全同一套后端）：
+
+```sh
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh status'
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh settime 0730'
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh trigger'      # 立刻跑一次内置任务
+su -c 'WEBUI_PIN=123456 sh /data/adb/modules/icbc_daily_water/webctl.sh setpin'
+```
+
+PIN 刻意**只接受环境变量 `WEBUI_PIN`**，不接受命令行参数，这样明文不会出现在进程列表里。上面这条请在本地终端手敲，不要写进脚本、别名或聊天记录。
+
+完整子命令见文件头注释：`webctl.sh status|setpin|settime|setenable|setmode|setopen|setsleep|setwatch|setcleanup|trigger[NAME]|restart|log|profiles|profile add/del/set|record start/stop/status`。
+
 ## 安装
 
-1. 从 Releases 下载 `xiaomi-17-pro-automation-v0.12.1.zip`。
+1. 从 Releases 下载 `xiaomi-17-pro-automation-v0.12.2.zip`。
 2. 在 KernelSU / Magisk 中刷入该 zip。
 3. 重启设备后打开模块 WebUI，按需设置解锁方式和 PIN。
 4. 首次使用录制任务时，填写目标 App 包名；切到该 App 后点击「开始录制」，操作完成后点击「停止录制」。
@@ -46,7 +70,7 @@ id=icbc_daily_water
 
 请不要手动删除这些目录或修改模块 ID；配置、Profile、PIN 和录制动作会继续沿用。
 
-> 如果升级后 WebUI 仍显示旧界面，打开模块 WebUI 确认右上角版本号是否为 `v0.12.1`；若不是，说明装的是旧包。
+> 如果升级后 WebUI 仍显示旧界面，打开模块 WebUI 确认右上角版本号是否为 `v0.12.2`；若不是，说明装的是旧包。
 
 ## 使用说明
 
@@ -137,7 +161,7 @@ bash tools/build_zip.sh
 脚本会在仓库父目录生成：
 
 ```text
-xiaomi-17-pro-automation-v0.12.1.zip
+xiaomi-17-pro-automation-v0.12.2.zip
 ```
 
 ## 许可证

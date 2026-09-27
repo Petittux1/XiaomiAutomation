@@ -27,9 +27,33 @@ It works by **direct root control** (`screencap` / `getevent` / `sendevent`) —
 - **A calmer interface**: a status summary at the top, everything else tucked into collapsible sections so the first screen is no longer one wall of form; expand / collapse everything in one tap.
 - The PIN is written only to the on-device config and never appears in the status output, the log or the source.
 
+## Requirements
+
+The module uses only the standard `customize.sh` + `service.sh` entry points: **no Zygisk, no `/system` changes, no metamodule required**. Scheduling, record/replay and PIN auto-unlock therefore all work under Magisk / APatch as well.
+
+The **WebUI, however, depends on the `kernelsu.js` bridge injected by KernelSU**, which Magisk / APatch do not provide:
+
+| Feature | KernelSU | Magisk / APatch |
+| --- | :---: | :---: |
+| Scheduling / record / replay / PIN auto-unlock | ✅ | ✅ |
+| Module WebUI | ✅ | ❌ (use `webctl.sh` below) |
+
+On Magisk / APatch, drive the same backend from a root shell via `webctl.sh`:
+
+```sh
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh status'
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh settime 0730'
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh trigger'      # run the built-in task now
+su -c 'WEBUI_PIN=123456 sh /data/adb/modules/icbc_daily_water/webctl.sh setpin'
+```
+
+The PIN is deliberately accepted **only through the `WEBUI_PIN` environment variable**, never as a command-line argument, so the plaintext never shows up in the process list. Type that last line by hand in a local terminal — do not put it in a script, an alias or a chat log.
+
+The full subcommand list is in the file header: `webctl.sh status|setpin|settime|setenable|setmode|setopen|setsleep|setwatch|setcleanup|trigger[NAME]|restart|log|profiles|profile add/del/set|record start/stop/status`.
+
 ## Installation
 
-1. Download `xiaomi-17-pro-automation-v0.12.1.zip` from Releases.
+1. Download `xiaomi-17-pro-automation-v0.12.2.zip` from Releases.
 2. Flash that zip in KernelSU / Magisk.
 3. Reboot, open the module WebUI and set the unlock method and PIN as needed.
 4. For a recorded task, fill in the target app package name; switch to that app and press "Start recording", then press "Stop recording" when you are done.
@@ -46,7 +70,7 @@ id=icbc_daily_water
 
 Do not delete these directories or change the module ID; your configuration, profiles, PIN and recorded actions are carried over.
 
-> If the WebUI still looks stale after upgrading, check the version in the top right — it must read `v0.12.1`. If it does not, the old package was installed.
+> If the WebUI still looks stale after upgrading, check the version in the top right — it must read `v0.12.2`. If it does not, the old package was installed.
 
 ## Usage
 
@@ -137,7 +161,7 @@ bash tools/build_zip.sh
 The script writes the following file into the parent directory:
 
 ```text
-xiaomi-17-pro-automation-v0.12.1.zip
+xiaomi-17-pro-automation-v0.12.2.zip
 ```
 
 ## License
