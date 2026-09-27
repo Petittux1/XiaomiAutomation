@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 # build_zip.sh - 从仓库内容重新生成可刷入的 KSU/Magisk 模块 zip
 # 用法: bash tools/build_zip.sh   (在仓库根目录执行)
-# 产物: ../xiaomi-17-pro-automation-v<版本>.zip
+# 产物: ../XiaomiAutomation-v<版本>.zip
 set -e
+
+# 发布包名的前缀。跟 module.prop 的 name= / config.json 的 name / GitHub 仓库名
+# 同源 —— 模块显示名是「澎湃自动化—XiaomiAutomation」, 包名用其中可 ASCII 化的那一半。
+# 刻意不带机型名: 机型信息已经在仓库 description、topics 和四份 README 里, 那是搜索
+# 真正看的地方; 而包名是要跟着模块长期走的标识, 写死机型以后改名/扩机型就得再改一次。
+# 构建期有断言钉住(见下面的 ZIP_NAME 检查), 别手改这个变量了事。
+ASSET_PREFIX="XiaomiAutomation"
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 VER=$(grep -m1 '^version=' "$ROOT/module.prop" | cut -d= -f2)
 VC=$(grep -m1 '^versionCode=' "$ROOT/module.prop" | cut -d= -f2)
-OUT="$(dirname "$ROOT")/xiaomi-17-pro-automation-${VER}.zip"
-STAGE="${TMPDIR:-/tmp}/xiaomi_17_pro_automation_zip_stage.$$"
+OUT="$(dirname "$ROOT")/${ASSET_PREFIX}-${VER}.zip"
+STAGE="${TMPDIR:-/tmp}/xiaomi_automation_zip_stage.$$"
 trap 'rm -rf "$STAGE"' EXIT HUP INT TERM
 
 # 缓存击穿用的标记: 只含版本号与数字, 不含路径, 注入后校验一次替换确实发生。
@@ -303,9 +310,9 @@ done
 # README.ru.md` 把这两份退回 v0.12.4, 连带把「下载 xxx.zip」那一行里的版本号也
 # 退回成 v0.12.4.zip, 而 EN/RU 的安装说明从此指向一个根本不存在的包, 没有任何
 # 守卫拦。所以这里两头都要查: 必须出现本次的包名, 且不能出现任何别的版本号。
-ZIP_NAME="xiaomi-17-pro-automation-${VER}.zip"
+ZIP_NAME="${ASSET_PREFIX}-${VER}.zip"
 for f in README.md README.en.md README.fr.md README.ru.md; do
-  names=$(grep -oE 'xiaomi-17-pro-automation-v[0-9]+\.[0-9]+\.[0-9]+\.zip' "$STAGE/$f" | sort -u)
+  names=$(grep -oE "${ASSET_PREFIX}-v[0-9]+\.[0-9]+\.[0-9]+\.zip" "$STAGE/$f" | sort -u)
   n=$(printf '%s\n' "$names" | grep -c . || true)
   [ "$n" = "1" ] || {
     echo "构建失败: $f 里引用的包名有 $n 个版本(应只有 1 个): $(printf '%s' "$names" | tr '\n' ' ')" >&2; exit 1; }
@@ -315,6 +322,19 @@ done
 # 产物本身也要对得上(OUT 由 VER 拼出来, 这里防的是有人手改了命名模板)
 [ "$(basename "$OUT")" = "$ZIP_NAME" ] || {
   echo "构建失败: 产物文件名是 '$(basename "$OUT")', 应为 '$ZIP_NAME'" >&2; exit 1; }
+# 包名前缀必须就是品牌串本身, 且不得夹带机型名。
+# 「所有 repo 名称统一」这条要求落到包名上的形式就是这个 —— v0.12.7 之前包名还叫
+# xiaomi-17-pro-automation, 和 module.prop 的 name / config.json 的 name / GitHub
+# 仓库名三处都不一样。
+# 光靠「README 引用的包名 == 产物名」查不出前缀被改过: 前缀改一处、全改一遍就
+# 依然自洽。所以这里额外把前缀钉死。机型名会以数字或 Pro 的形式出现, 用 case 的
+# 字符类判断(不依赖 LANG, Termux 下 wc -m / 字符类 grep 都会退化成逐字节)。
+[ "$ASSET_PREFIX" = "XiaomiAutomation" ] || {
+  echo "构建失败: ASSET_PREFIX 应为 'XiaomiAutomation', 实际 '$ASSET_PREFIX'" >&2; exit 1; }
+case "$ASSET_PREFIX" in
+  *[0-9]*|*[Pp][Rr][Oo]*)
+    echo "构建失败: ASSET_PREFIX '$ASSET_PREFIX' 里带了机型名 —— 包名前缀只用品牌串" >&2; exit 1 ;;
+esac
 
 # 文档里写错的命令比没有文档更糟: 用户照抄就失败。四份 README 都会给出
 # webctl.sh 的命令行示例(Magisk / APatch 下没有 WebUI, 只能这么配), 所以
