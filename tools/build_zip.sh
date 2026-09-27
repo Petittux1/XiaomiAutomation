@@ -199,12 +199,43 @@ grep -qE "^function bridgeOk\(\)" "$STAGE/webroot/app.js" || {
 # ---------- 别再写回那句错的兼容性说明 ----------
 # v0.12.2 ~ v0.12.4 的文案说「WebUI 需 KernelSU / requires KernelSU」, 并把
 # APatch 和 Magisk 归为不支持。查 APatch 源码后确认这是错的: 它注入的也是
-# window.ksu、也用 webroot/、同一个源。旧文案一旦被改回来就是又发一次错信息。
-if grep -rqF 'WebUI 需 KernelSU' "$STAGE" 2>/dev/null \
-|| grep -rqF 'WebUI requires KernelSU' "$STAGE" 2>/dev/null; then
-  echo "构建失败: 仍有「WebUI 需/requires KernelSU」的旧文案 —— APatch 同样支持 WebUI" >&2; exit 1
-fi
-# 正确的新文案必须四处都在(中文/英文 module.prop 描述 + 四份 README 的对照表),
+# window.ksu、也用 webroot/、同一个源。
+#
+# 这里必须按「旧句子的判别特征」来拦, 不能只查 'WebUI requires KernelSU' 这一句
+# 逐字文案 —— 踩过的坑: 英文和俄文 README 被一次误用的 `git checkout --` 退回旧版,
+# 旧版写的是 "depends on the `kernelsu.js` bridge injected by KernelSU" /
+# "зависит от моста `kernelsu.js`, который внедряет KernelSU", 逐字查
+# 'WebUI requires KernelSU' 完全查不到, 构建照样通过, 于是错的说明被发了出去。
+# 下面查的是「把 KernelSU 说成唯一注入方 / 把 APatch 和 Magisk 合成一列」这两个
+# 结构性特征, 任何一种旧写法都命中。
+for f in README.md README.en.md README.fr.md README.ru.md; do
+  case "$(cat "$STAGE/$f")" in
+    *"bridge injected by KernelSU"* | *"injected by KernelSU"*)
+      echo "构建失败: $f 仍有「桥由 KernelSU 注入」的旧说法 —— APatch 注入的是同一个 ksu 全局" >&2; exit 1 ;;
+    *"pont \`kernelsu.js\` injecté par KernelSU"* | *"injecté par KernelSU"*)
+      echo "构建失败: $f 仍有「pont injecté par KernelSU」的旧说法 —— APatch 注入的是同一个 ksu 全局" >&2; exit 1 ;;
+    *"который внедряет KernelSU"* | *"внедряет KernelSU"*)
+      echo "构建失败: $f 仍有「внедряет KernelSU」的旧说法 —— APatch 注入的是同一个 ksu 全局" >&2; exit 1 ;;
+  esac
+  # 新版对照表是三列(KernelSU / APatch / Magisk 分开)。旧版把后两者合成
+  # 「Magisk / APatch」一列, 出现这个表头就说明还是旧表。
+  if grep -qE '^\| *Feature *\| *KernelSU *\| *Magisk */ *APatch *\||^ *\| *功能 *\| *KernelSU *\| *Magisk */ *APatch *\|' "$STAGE/$f"; then
+    echo "构建失败: $f 的对照表还是旧的两列版(把 APatch 和 Magisk 合成了一列)" >&2; exit 1
+  fi
+  # 新版必须显式提到 config.json 的引擎声明 —— 旧版没有这个文件, 也没有这段话。
+  case "$(cat "$STAGE/$f")" in
+    *"webui-engine"*) : ;;
+    *) echo "构建失败: $f 的运行环境小节没提 config.json 的 webui-engine 声明" >&2; exit 1 ;;
+  esac
+done
+# 四份 README 都要写明 MMRL 那条 ksu 引擎已被上游标记废弃的风险, 否则用户会在
+# MMRL 升级后一头撞上白屏。这条提示是外部仓库的将来状态, 拦不住上游, 只能保证
+# 我们自己别把警告删掉。
+for f in README.md README.en.md README.fr.md README.ru.md; do
+  grep -qF '2026-03-14' "$STAGE/$f" || {
+    echo "构建失败: $f 缺 MMRL ksu 引擎废弃风险提示(应含 2026-03-14 这个日期)" >&2; exit 1; }
+done
+# 正确的新文案必须在五份文件里都出现(中文/英文 module.prop 描述 + 四份 README),
 # 少一处就会在某一种语言里继续误导用户。
 for f in module.prop README.md README.en.md README.fr.md README.ru.md; do
   grep -qF 'APatch' "$STAGE/$f" || {

@@ -42,6 +42,8 @@ Magisk est la seule exception : le code amont de Magisk ne contient **aucun code
 
 **KsuWebUI** et **MMRL** obtiennent chacun le root sur Magisk eux-mêmes, puis injectent ce même objet global `ksu` dans `webroot/`. Une fois l'un d'eux installé, ce module ne demande aucune modification et le WebUI fonctionne tel quel — c'est la pratique adoptée dans tout l'écosystème sur Magisk. Ce module fournit un `config.json` déclarant `"webui-engine": "ksu"`, afin que MMRL choisisse son moteur compatible `ksu` plutôt que son WebUI X par défaut (dont l'API n'est pas compatible).
 
+> ⚠️ Les deux voies fonctionnent, mais **KsuWebUI est la plus solide** : c'est une application autonome qui obtient elle-même le root et ne dépend d'aucun gestionnaire. Le moteur compatible `ksu` de MMRL est marqué obsolète dans sa dépendance WebUI X Portable depuis le 2026-03-14 — MMRL épingle actuellement une version de 7 heures antérieure, ce qui fonctionne pour l'instant, et cela pourrait cesser après une mise à jour de MMRL. Si cela arrive, passez à KsuWebUI ; ce module n'a rien à changer.
+
 Dans tous les environnements, vous pouvez piloter le même backend depuis un shell root via `webctl.sh` :
 
 ```shsu -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh status'
@@ -56,7 +58,7 @@ La liste complète des sous-commandes figure en en-tête du fichier : `webctl.sh
 
 ## Installation
 
-1. Téléchargez `xiaomi-17-pro-automation-v0.12.5.zip` depuis les Releases.
+1. Téléchargez `xiaomi-17-pro-automation-v0.12.6.zip` depuis les Releases.
 2. Flashez ce zip dans KernelSU / Magisk.
 3. Redémarrez, ouvrez le WebUI du module et réglez la méthode de déverrouillage et le code PIN selon vos besoins.
 4. Pour une tâche enregistrée, renseignez le nom de package de l'application cible ; basculez vers cette application et appuyez sur « Démarrer l'enregistrement », puis sur « Arrêter l'enregistrement » lorsque vous avez terminé.
@@ -164,7 +166,7 @@ bash tools/build_zip.sh
 Le script écrit le fichier suivant dans le répertoire parent :
 
 ```text
-xiaomi-17-pro-automation-v0.12.5.zip
+xiaomi-17-pro-automation-v0.12.6.zip
 ```
 
 ## Licence

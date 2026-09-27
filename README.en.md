@@ -31,17 +31,22 @@ It works by **direct root control** (`screencap` / `getevent` / `sendevent`) —
 
 The module uses only the standard `customize.sh` + `service.sh` entry points: **no Zygisk, no `/system` changes, no metamodule required**. Scheduling, record/replay and PIN auto-unlock therefore all work under Magisk / APatch as well.
 
-The **WebUI, however, depends on the `kernelsu.js` bridge injected by KernelSU**, which Magisk / APatch do not provide:
+The WebUI is **not KernelSU-only** either. APatch has had module WebUI since build 10568, and it does exactly what KernelSU does: it serves `webroot/` from `https://mui.kernelsu.org` and injects a global object with the **same name**, `ksu` — the object this module's `kernelsu.js` talks to. The WebUI therefore works on APatch out of the box, with no code change at all. The same holds for the KernelSU forks (KernelSU Next, SukiSU Ultra).
 
-| Feature | KernelSU | Magisk / APatch |
-| --- | :---: | :---: |
-| Scheduling / record / replay / PIN auto-unlock | ✅ | ✅ |
-| Module WebUI | ✅ | ❌ (use `webctl.sh` below) |
+Magisk is the one exception: upstream Magisk contains **no WebView code whatsoever** — not "unimplemented", it simply has no such capability — so it will not render `webroot/` on its own. To use the WebUI there you need a host app that provides one:
 
-On Magisk / APatch, drive the same backend from a root shell via `webctl.sh`:
+| Feature | KernelSU / forks | APatch | Magisk |
+| --- | :---: | :---: | :---: |
+| Scheduling / record / replay / PIN auto-unlock | ✅ | ✅ | ✅ |
+| Module WebUI | ✅ | ✅ | ✅ with KsuWebUI or MMRL |
 
-```sh
-su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh status'
+**KsuWebUI** and **MMRL** each obtain root on Magisk themselves and then inject that very same `ksu` global into `webroot/`. With either one installed this module needs no changes whatsoever and the WebUI works as-is — this is the ecosystem-wide practice on Magisk. This module ships a `config.json` declaring `"webui-engine": "ksu"`, so MMRL picks its `ksu`-compatible engine instead of its default WebUI X (whose API is not compatible).
+
+> ⚠️ Both routes work, but **KsuWebUI is the sturdier one**: it is a standalone app that gets root itself and depends on no manager. MMRL's `ksu`-compatible engine was marked deprecated in its WebUI X Portable dependency on 2026-03-14 — MMRL currently happens to pin a version from 7 hours before that, so it works for now, and may stop working once MMRL updates. If it ever does, switch to KsuWebUI; this module needs no change.
+
+In any environment you can drive the same backend from a root shell via `webctl.sh`:
+
+```shsu -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh status'
 su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh settime 0730'
 su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh trigger'      # run the built-in task now
 su -c 'WEBUI_PIN=123456 sh /data/adb/modules/icbc_daily_water/webctl.sh setpin'

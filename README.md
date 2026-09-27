@@ -59,6 +59,8 @@ Magisk 是唯一的例外：上游 Magisk 里**一行 WebView 代码都没有**�
 
 **KsuWebUI** 和 **MMRL** 做的事就是在 Magisk 上自己申请 root，再把**同一个** `ksu` 全局注入给 `webroot/`。装了它们之后本模块无需任何改动，WebUI 原样可用——这正是整个生态在 Magisk 上的通行做法。本模块已附带 `config.json`，声明 `"webui-engine": "ksu"`，MMRL 会据此选用 `ksu` 兼容引擎，而不是它默认的 WebUI X（后者 API 不兼容）。
 
+> ⚠️ 两条路都通，但 **KsuWebUI 更稳**：它是个独立 App，自己拿 root，不依赖任何管理器。MMRL 的 `ksu` 兼容引擎在其 WebUI X Portable 依赖里已于 2026-03-14 被标记废弃（当前 MMRL 恰好锁在废弃前 7 小时的版本上，所以暂时可用），MMRL 升级后这一条可能失效。真出问题就换 KsuWebUI，本模块不用动。
+
 任何环境下想改配置，都可以用 root shell 直接调 `webctl.sh`（与 WebUI 完全同一套后端）：
 
 ```shsu -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh status'
@@ -73,7 +75,7 @@ PIN 刻意**只接受环境变量 `WEBUI_PIN`**，不接受命令行参数，这
 
 ## 安装
 
-1. 从 Releases 下载 `xiaomi-17-pro-automation-v0.12.5.zip`。
+1. 从 Releases 下载 `xiaomi-17-pro-automation-v0.12.6.zip`。
 2. 在 KernelSU / Magisk 中刷入该 zip。
 3. 重启设备后打开模块 WebUI，按需设置解锁方式和 PIN。
 4. 首次使用录制任务时，填写目标 App 包名；切到该 App 后点击「开始录制」，操作完成后点击「停止录制」。
@@ -181,7 +183,7 @@ bash tools/build_zip.sh
 脚本会在仓库父目录生成：
 
 ```text
-xiaomi-17-pro-automation-v0.12.5.zip
+xiaomi-17-pro-automation-v0.12.6.zip
 ```
 
 ## 许可证
