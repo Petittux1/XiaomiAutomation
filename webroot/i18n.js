@@ -14,7 +14,7 @@ export const DEFAULT_LANG = 'zh-CN';
 const STORE_KEY = 'icbcauto.webui.lang';
 
 const zh = {
-  'app.title': '💧 Xiaomi 17 Pro 自动化模块',
+  'app.title': '💧 澎湃自动化 · Xiaomi 17 Pro',
   'app.loading': '…',
 
   'btn.save': '保存',
@@ -167,7 +167,7 @@ const zh = {
 };
 
 const en = {
-  'app.title': '💧 Xiaomi 17 Pro Automation',
+  'app.title': '💧 XiaomiAutomation · Xiaomi 17 Pro',
   'app.loading': '…',
 
   'btn.save': 'Save',
@@ -320,7 +320,7 @@ const en = {
 };
 
 const fr = {
-  'app.title': '💧 Automatisation Xiaomi 17 Pro',
+  'app.title': '💧 XiaomiAutomation · Xiaomi 17 Pro',
   'app.loading': '…',
 
   'btn.save': 'Enregistrer',
@@ -473,7 +473,7 @@ const fr = {
 };
 
 const ru = {
-  'app.title': '💧 Автоматизация Xiaomi 17 Pro',
+  'app.title': '💧 XiaomiAutomation · Xiaomi 17 Pro',
   'app.loading': '…',
 
   'btn.save': 'Сохранить',

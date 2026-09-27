@@ -109,11 +109,42 @@ done
 grep -qE '^DEV_APPLY=0$' "$STAGE/device.conf" || {
   echo "构建失败: device.conf 模板的 DEV_APPLY 必须是 0(17 Pro 基线)" >&2; exit 1; }
 # ---------- module.prop 自检 ----------
+# name 是模块在管理器列表里显示的名字。它只是显示字符串 —— 没有任何脚本读它
+# (只有 service.sh 读 version=), 所以改名不影响升级、不影响模块目录。
+# 但它同时出现在 WebUI 标题和四份 README 里, 共 9 处, 很容易只改一半,
+# 所以把「品牌名必须一致」钉成断言。
+BRAND_CN='澎湃自动化—XiaomiAutomation'
+BRAND_EN='XiaomiAutomation'
+# WebUI 标题用短形式: 17 Pro 只有约 348dp 宽, 而 h1 是 nowrap + ellipsis,
+# 完整品牌名再加机型放不下会被截成省略号。短形式已经把品牌和机型都带上了。
+TITLE_CN="💧 澎湃自动化 · Xiaomi 17 Pro"
+TITLE_EN="💧 $BRAND_EN · Xiaomi 17 Pro"
+NAME=$(sed -n 's/^name=//p' "$STAGE/module.prop")
+[ "$NAME" = "$BRAND_CN" ] || {
+  echo "构建失败: module.prop 的 name 应为 '$BRAND_CN', 实际 '$NAME'" >&2; exit 1; }
+grep -qF "<title>$BRAND_CN</title>" "$STAGE/webroot/index.html" || {
+  echo "构建失败: index.html 的 <title> 不是 '$BRAND_CN'" >&2; exit 1; }
+grep -qF "$TITLE_CN" "$STAGE/webroot/index.html" || {
+  echo "构建失败: index.html 的 <h1> 静态文案应是 '$TITLE_CN'" >&2; exit 1; }
+# 注意: grep -c 匹配不到时退出码是 1, 而本脚本有 set -e, 所以
+# `n=$(grep -c ...)` 会在「一个都没匹配上」时直接静默杀掉脚本, 根本走不到下面
+# 那句报错 —— 恰好是最该报错的情况。所以一律加 `|| true` 把退出码吃掉。
+n=$(grep -cF "'app.title': '$TITLE_CN'" "$STAGE/webroot/i18n.js" || true)
+[ "$n" = "1" ] || { echo "构建失败: i18n.js 里中文 app.title 应有 1 条, 实际 $n 条" >&2; exit 1; }
+n=$(grep -cF "'app.title': '$TITLE_EN'" "$STAGE/webroot/i18n.js" || true)
+[ "$n" = "3" ] || { echo "构建失败: i18n.js 里 en/fr/ru 的 app.title 应有 3 条, 实际 $n 条" >&2; exit 1; }
+grep -qF "# $BRAND_CN" "$STAGE/README.md" || {
+  echo "构建失败: README.md 的一级标题不是 '# $BRAND_CN'" >&2; exit 1; }
+for f in README.en.md README.fr.md README.ru.md; do
+  head -1 "$STAGE/$f" | grep -qF "# $BRAND_EN" || {
+    echo "构建失败: $f 的一级标题应是 '# $BRAND_EN'" >&2; exit 1; }
+done
+
 # description 是单行属性(readProperty 按第一个 = 切开、且不处理转义), 写多行
 # 会被后面的行当成新键丢掉。这里把「中文优先、再英文」钉成断言。
 # 注意别用 grep '[一-鿿]' 这类字符类: Termux 下 LANG 常常是空的, 它会退化成
 # 逐字节匹配; wc -m 也会退化成 wc -c。改成按字面量标识串判断, 与 locale 无关。
-n_desc=$(grep -c '^description=' "$STAGE/module.prop")
+n_desc=$(grep -c '^description=' "$STAGE/module.prop" || true)
 [ "$n_desc" = "1" ] || { echo "构建失败: module.prop 里 description 必须恰好一行" >&2; exit 1; }
 DESC=$(sed -n 's/^description=//p' "$STAGE/module.prop")
 [ -n "$DESC" ] || { echo "构建失败: module.prop 的 description 为空" >&2; exit 1; }

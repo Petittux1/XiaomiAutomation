@@ -1,4 +1,4 @@
-# Automatisation Xiaomi 17 Pro
+# XiaomiAutomation
 
 [中文](README.md) · [English](README.en.md) · [Русский](README.ru.md)
 
@@ -53,7 +53,7 @@ La liste complète des sous-commandes figure en en-tête du fichier : `webctl.sh
 
 ## Installation
 
-1. Téléchargez `xiaomi-17-pro-automation-v0.12.3.zip` depuis les Releases.
+1. Téléchargez `xiaomi-17-pro-automation-v0.12.4.zip` depuis les Releases.
 2. Flashez ce zip dans KernelSU / Magisk.
 3. Redémarrez, ouvrez le WebUI du module et réglez la méthode de déverrouillage et le code PIN selon vos besoins.
 4. Pour une tâche enregistrée, renseignez le nom de package de l'application cible ; basculez vers cette application et appuyez sur « Démarrer l'enregistrement », puis sur « Arrêter l'enregistrement » lorsque vous avez terminé.
@@ -70,7 +70,7 @@ id=icbc_daily_water
 
 Ne supprimez pas ces répertoires et ne modifiez pas l'identifiant du module ; votre configuration, vos profils, votre code PIN et vos actions enregistrées sont conservés.
 
-> Si le WebUI semble encore obsolète après la mise à jour, vérifiez la version en haut à droite : elle doit indiquer `v0.12.3`. Sinon, l'ancien paquet a été installé.
+> Si le WebUI semble encore obsolète après la mise à jour, vérifiez la version en haut à droite : elle doit indiquer `v0.12.4`. Sinon, l'ancien paquet a été installé.
 
 ## Utilisation
 
@@ -161,7 +161,7 @@ bash tools/build_zip.sh
 Le script écrit le fichier suivant dans le répertoire parent :
 
 ```text
-xiaomi-17-pro-automation-v0.12.3.zip
+xiaomi-17-pro-automation-v0.12.4.zip
 ```
 
 ## Licence

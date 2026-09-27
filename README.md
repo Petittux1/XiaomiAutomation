@@ -1,10 +1,10 @@
-# Xiaomi 17 Pro 自动化模块
+# 澎湃自动化—XiaomiAutomation
 
 [English](README.en.md) · [Français](README.fr.md) · [Русский](README.ru.md)
 
 > **English summary** (the full English documentation is in [README.en.md](README.en.md); the rest of this file is the Chinese version, which is the primary one)
 >
-> **Xiaomi 17 Pro 自动化模块** is a **device-specific** root automation module for **Xiaomi 17 Pro / HyperOS 4**, installable on **KernelSU, Magisk and APatch**. It provides multi-profile scheduling, record/replay of arbitrary app interactions, and a built-in ICBC daily watering task (07:30 by default). Automation is done by **pure root control** (`screencap` / `getevent` / `sendevent`) — no accessibility service, no Xposed, no hooks, no `input` injection.
+> **澎湃自动化 (XiaomiAutomation)** is a **device-specific** root automation module for **Xiaomi 17 Pro / HyperOS 4**, installable on **KernelSU, Magisk and APatch**. It provides multi-profile scheduling, record/replay of arbitrary app interactions, and a built-in ICBC daily watering task (07:30 by default). Automation is done by **pure root control** (`screencap` / `getevent` / `sendevent`) — no accessibility service, no Xposed, no hooks, no `input` injection.
 >
 > | Feature | KernelSU | Magisk / APatch |
 > | --- | :---: | :---: |
@@ -68,7 +68,7 @@ PIN 刻意**只接受环境变量 `WEBUI_PIN`**，不接受命令行参数，这
 
 ## 安装
 
-1. 从 Releases 下载 `xiaomi-17-pro-automation-v0.12.3.zip`。
+1. 从 Releases 下载 `xiaomi-17-pro-automation-v0.12.4.zip`。
 2. 在 KernelSU / Magisk 中刷入该 zip。
 3. 重启设备后打开模块 WebUI，按需设置解锁方式和 PIN。
 4. 首次使用录制任务时，填写目标 App 包名；切到该 App 后点击「开始录制」，操作完成后点击「停止录制」。
@@ -85,7 +85,7 @@ id=icbc_daily_water
 
 请不要手动删除这些目录或修改模块 ID；配置、Profile、PIN 和录制动作会继续沿用。
 
-> 如果升级后 WebUI 仍显示旧界面，打开模块 WebUI 确认右上角版本号是否为 `v0.12.3`；若不是，说明装的是旧包。
+> 如果升级后 WebUI 仍显示旧界面，打开模块 WebUI 确认右上角版本号是否为 `v0.12.4`；若不是，说明装的是旧包。
 
 ## 使用说明
 
@@ -176,7 +176,7 @@ bash tools/build_zip.sh
 脚本会在仓库父目录生成：
 
 ```text
-xiaomi-17-pro-automation-v0.12.3.zip
+xiaomi-17-pro-automation-v0.12.4.zip
 ```
 
 ## 许可证
