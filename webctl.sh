@@ -1,6 +1,6 @@
 #!/system/bin/sh
-# icbc_daily_water / webctl.sh v0.9.6 - WebUI 助手 (由 KSU 管理器 WebView 以 root 调用)
-# 用法: webctl.sh status|setpin|settime|setenable|setmode|setopen|setsleep|setwatch|
+# icbc_daily_water / webctl.sh v0.10.0 - WebUI 助手 (由 KSU 管理器 WebView 以 root 调用)
+# 用法: webctl.sh status|setpin|settime|setenable|setmode|setopen|setsleep|setwatch|setcleanup|
 #        trigger[NAME]|restart|log|profiles|profile add/del/set|record start/stop/status
 M=/data/adb/modules/icbc_daily_water
 CFG=/data/adb/icbc_water/sched.conf
@@ -154,7 +154,7 @@ restart_svc() {
 prof_line() {
   CD=$1
   PN=$(basename "$CD")
-  P_NAME=; P_TYPE=; P_PKG=; P_SCHED=; P_ENABLE=
+  P_NAME=; P_TYPE=; P_PKG=; P_SCHED=; P_ENABLE=; P_CLEANUP=
   [ -f $CD/conf ] && . $CD/conf 2>/dev/null
   T0=$(date +%Y%m%d)
   PD=no
@@ -164,7 +164,7 @@ prof_line() {
   PACTS=0
   # sw@DUR 是新格式; 同时兼容旧 sw 空格格式
   [ -f $CD/actions.rx ] && PACTS=$(grep -cE '^W[0-9]+ (tap|sw@[0-9]+|sw)($| )' $CD/actions.rx 2>/dev/null)
-  echo "profile=$PN pname=${P_NAME:-$PN} ptype=${P_TYPE:-script} ppkg=${P_PKG:-} psched=${P_SCHED:-} penable=${P_ENABLE:-} pdone=$PD ptry=$PTRY pacts=${PACTS:-0}"
+  echo "profile=$PN pname=${P_NAME:-$PN} ptype=${P_TYPE:-script} ppkg=${P_PKG:-} psched=${P_SCHED:-} penable=${P_ENABLE:-} pcleanup=${P_CLEANUP:-} pdone=$PD ptry=$PTRY pacts=${PACTS:-0}"
 }
 
 list_profiles() {
@@ -260,6 +260,9 @@ case "$1" in
   setwatch)
     case "$2" in 1|0) setval WATCH_OPEN "$2";; *) echo "ERR watch 0/1"; exit 1;; esac
     ;;
+  setcleanup)
+    case "$2" in 1|0) setval CLEANUP_AFTER "$2";; *) echo "ERR cleanup 0/1"; exit 1;; esac
+    ;;
   profiles)
     list_profiles
     ;;
@@ -307,7 +310,7 @@ case "$1" in
         echo "PROFILE_DEL $SLUG"
         ;;
       set)
-        # profile set SLUG KEY VALUE  KEY: p_name|p_pkg|p_sched|p_enable  (写 conf 大写 P_ 字段)
+        # profile set SLUG KEY VALUE  KEY: p_name|p_pkg|p_sched|p_enable|p_cleanup  (写 conf 大写 P_ 字段)
         SLUG=$3; KEY=$4; VAL=$5
         slugok "$SLUG" || { echo "ERR slug"; exit 1; }
         [ -f $PFX/$SLUG/conf ] || { echo "ERR no profile $SLUG"; exit 1; }
@@ -329,7 +332,15 @@ case "$1" in
           p_enable) KEY=P_ENABLE
             case "$VAL" in 1|0) ;; *) echo "ERR enable 0/1"; exit 1;; esac
             ;;
-          *) echo "ERR key p_name|p_pkg|p_sched|p_enable"; exit 1;;
+          p_cleanup) KEY=P_CLEANUP
+            # 空值 = 跟随全局 CLEANUP_AFTER; 0 = 该任务不清; 1 = 该任务强制清
+            case "$VAL" in
+              1|0) ;;
+              '') ;;
+              *) echo "ERR cleanup 0/1"; exit 1;;
+            esac
+            ;;
+          *) echo "ERR key p_name|p_pkg|p_sched|p_enable|p_cleanup"; exit 1;;
         esac
         if ! atomic_update "$PFX/$SLUG/conf" "$KEY" "$VAL"; then
           echo "ERR write profile"
@@ -383,7 +394,7 @@ case "$1" in
     tail -60 $LOG 2>/dev/null || echo "(no log yet)"
     ;;
   *)
-    echo "usage: webctl.sh status|setpin|settime|setenable|setmode|setopen|setsleep|setwatch|trigger[NAME]|restart|log|profiles|profile add/del/set|record start/stop/status"
+    echo "usage: webctl.sh status|setpin|settime|setenable|setmode|setopen|setsleep|setwatch|setcleanup|trigger[NAME]|restart|log|profiles|profile add/del/set|record start/stop/status"
     ;;
 esac
 exit 0

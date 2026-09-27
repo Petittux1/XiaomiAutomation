@@ -1,6 +1,6 @@
 id=icbc_daily_water
 name=Xiaomi 17 Pro 自动化模块
-version=v0.9.6
-versionCode=906
+version=v0.10.0
+versionCode=910
 author=petittux
-description=Xiaomi 17 Pro 多 Profile 自动化: 内置工行定时浇水(默认07:30) + 任意 App 录制操作回放。纯 root 直控(sendevent/screencap/getevent), 不 hook 不无障碍。KSU 管理器内置 WebUI: 录/放操作、多任务定时、锁屏密码/时间开关。
+description=Xiaomi 17 Pro / HyperOS 4 root automation module: multi-profile scheduler + record/replay for any app, with a built-in ICBC daily watering task (07:30 by default). Pure root control (sendevent/screencap/getevent), no hooks, no accessibility. Multilingual WebUI: zh/en/fr/ru.

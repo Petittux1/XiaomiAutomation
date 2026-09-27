@@ -1,8 +1,12 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- 模块升级后 WebUI 容易被 WebView 命中旧缓存: 显式禁用缓存 + 资源带版本号(见 tools/build_zip.sh) -->
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Xiaomi 17 Pro 自动化模块</title>
 <style>
   :root {
@@ -53,78 +57,88 @@
   .pkgbox:disabled { opacity: .45; }
   .prof .pbtns { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
   .prof .prow2 { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .prof select.cleanup { flex: none; width: auto; padding: 6px 8px; font-size: 12px; }
   .rec-on { color: #f87171; font-weight: 700; }
+  #lang { flex: none; width: auto; padding: 6px 8px; font-size: 12px; }
+  footer { max-width: 560px; margin: 16px auto 0; text-align: center; font-size: 11px; color: var(--mut); }
 </style>
 </head>
 <body>
 <header>
-  <h1>💧 Xiaomi 17 Pro 自动化模块</h1>
-  <span id="ver" class="pill">v0.9.6</span>
-  <span id="today" class="pill">…</span>
+  <h1 data-i18n="app.title">💧 Xiaomi 17 Pro 自动化模块</h1>
+  <span id="ver" class="pill">v0.10.0</span>
+  <span id="today" class="pill" data-i18n="app.loading">…</span>
+  <select id="lang" data-i18n-title="lbl.lang" title="语言"></select>
 </header>
 
 <main>
   <section class="card">
-    <h2>⏰ 每日浇水时间</h2>
-    <p class="hint">到点自动：亮屏 → 解锁 → 执行任务（内置工行会打开工行；录制任务按包名打开或使用当前画面）→ 按设置熄屏。默认 07:30（避开工行夜间维护窗口）</p>
+    <h2 data-i18n="card.time.title">⏰ 每日浇水时间</h2>
+    <p class="hint" data-i18n="card.time.hint">到点自动：亮屏 → 解锁 → 执行任务（内置工行会打开工行；录制任务按包名打开或使用当前画面）→ 按设置熄屏。默认 07:30（避开工行夜间维护窗口）</p>
     <div class="row">
       <input type="time" id="time" value="07:30">
-      <button id="btnTime" class="primary">保存</button>
+      <button id="btnTime" class="primary" data-i18n="btn.save">保存</button>
     </div>
-    <label class="switchrow"><span>启用定时自动浇水</span><input type="checkbox" id="enable"></label>
+    <label class="switchrow"><span data-i18n="lbl.schedEnable">启用定时自动浇水</span><input type="checkbox" id="enable"></label>
   </section>
 
   <section class="card">
-    <h2>📁 任务 Profiles</h2>
-    <p class="hint">每个任务独立定时。内置「工行定时浇水」为脚本型；新建为录制型：包名非空时切到目标 app 后开始，离开暂停、回来继续；包名留空则亮屏录全量。要录左右边缘返回请填写目标包名；裸录会按规则过滤边缘滑动。锁屏自动暂停，全部录完点停止即可</p>
+    <h2 data-i18n="card.prof.title">📁 任务 Profiles</h2>
+    <p class="hint" data-i18n="card.prof.hint">每个任务独立定时。内置「工行定时浇水」为脚本型；新建为录制型：包名非空时切到目标 app 后开始，离开暂停、回来继续；包名留空则亮屏录全量。要录左右边缘返回请填写目标包名；裸录会按规则过滤边缘滑动。锁屏自动暂停，全部录完点停止即可</p>
     <div id="profs"></div>
     <div class="row rowwrap">
-      <input type="text" id="npName" placeholder="新任务名(如 支付宝浇水)" class="flex1">
-      <input type="text" id="npPkg" placeholder="包名（可留空：亮屏全量录）" class="flex1">
+      <input type="text" id="npName" data-i18n-ph="ph.npName" placeholder="新任务名(如 支付宝浇水)" class="flex1">
+      <input type="text" id="npPkg" data-i18n-ph="ph.npPkg" placeholder="包名（可留空：亮屏全量录）" class="flex1">
       <input type="time" id="npTime" value="07:30">
-      <button id="btnPAdd" class="primary">＋ 新增</button>
+      <button id="btnPAdd" class="primary" data-i18n="btn.add">＋ 新增</button>
     </div>
   </section>
 
   <section class="card">
-    <h2>🔓 锁屏密码 (PIN)</h2>
-    <p class="hint">6 位数字。仅写入本机 /data/adb/icbc_water/sched.conf（chmod 600）；状态、日志和接口不回显明文。保存后立即生效</p>
+    <h2 data-i18n="card.pin.title">🔓 锁屏密码 (PIN)</h2>
+    <p class="hint" data-i18n="card.pin.hint">6 位数字。仅写入本机 /data/adb/icbc_water/sched.conf（chmod 600）；状态、日志和接口不回显明文。保存后立即生效</p>
     <div class="row">
-      <input type="password" id="pin" placeholder="已设置（输入新密码才修改）" inputmode="numeric" maxlength="8" autocomplete="off">
-      <button id="btnShow" class="ghost">显示</button>
-      <button id="btnPin" class="primary">保存</button>
+      <input type="password" id="pin" data-i18n-ph="ph.pinSet" placeholder="已设置（输入新密码才修改）" inputmode="numeric" maxlength="8" autocomplete="off">
+      <button id="btnShow" class="ghost" data-i18n="btn.show">显示</button>
+      <button id="btnPin" class="primary" data-i18n="btn.save">保存</button>
     </div>
-    <label class="switchrow"><span>解锁方式</span>
+    <label class="switchrow"><span data-i18n="lbl.unlockMode">解锁方式</span>
       <select id="mode">
-        <option value="pin">PIN 盲打解锁</option>
-        <option value="swipe">上滑解锁（无密码）</option>
+        <option value="pin" data-i18n="opt.pin">PIN 盲打解锁</option>
+        <option value="swipe" data-i18n="opt.swipe">上滑解锁（无密码）</option>
       </select>
     </label>
   </section>
 
   <section class="card">
-    <h2>⚙️ 其它</h2>
-    <label class="switchrow"><span>每日首次打开工行自动浇水</span><input type="checkbox" id="watch"></label>
-    <label class="switchrow"><span>浇完自动熄屏</span><input type="checkbox" id="sleep"></label>
+    <h2 data-i18n="card.misc.title">⚙️ 其它</h2>
+    <label class="switchrow"><span data-i18n="lbl.watchOpen">每日首次打开工行自动浇水</span><input type="checkbox" id="watch"></label>
+    <label class="switchrow"><span data-i18n="lbl.sleepAfter">浇完自动熄屏</span><input type="checkbox" id="sleep"></label>
+    <label class="switchrow"><span data-i18n="lbl.cleanupAfter">跑完清理后台（释放内存）</span><input type="checkbox" id="cleanup"></label>
+    <p class="hint" data-i18n="lbl.cleanupHint" style="margin: 6px 0 0;">任务结束后自动退出目标 app，释放内存；下一个任务从干净状态开始</p>
   </section>
 
   <section class="card">
-    <h2>🔬 触发检查（没浇时看这里）</h2>
-    <p class="hint">定时触发条件逐项显示，每 15 秒自动刷新；哪项 ✗ 就是没触发的原因</p>
+    <h2 data-i18n="card.chk.title">🔬 触发检查（没浇时看这里）</h2>
+    <p class="hint" data-i18n="card.chk.hint">定时触发条件逐项显示，每 15 秒自动刷新；哪项 ✗ 就是没触发的原因</p>
     <div id="chk"></div>
   </section>
 
   <section class="card rowwrap">
-    <button id="btnTrigger" class="primary">💧 立即浇水（测试）</button>
-    <button id="btnRestart" class="ghost">重启服务</button>
-    <button id="btnRefresh" class="ghost">刷新状态</button>
+    <button id="btnTrigger" class="primary" data-i18n="btn.runNow">💧 立即浇水（测试）</button>
+    <button id="btnRestart" class="ghost" data-i18n="btn.restart">重启服务</button>
+    <button id="btnRefresh" class="ghost" data-i18n="btn.refresh">刷新状态</button>
   </section>
 
   <section class="card">
-    <div class="row"><h2 class="flex1">📜 运行日志</h2><button id="btnLog" class="ghost">刷新</button></div>
-    <pre id="log">加载中…</pre>
+    <div class="row"><h2 class="flex1" data-i18n="card.log.title">📜 运行日志</h2><button id="btnLog" class="ghost" data-i18n="btn.logRefresh">刷新</button></div>
+    <pre id="log" data-i18n="log.empty">(no log yet)</pre>
   </section>
 </main>
+
+<footer>
+  <div id="footver"></div>
+</footer>
 
 <script type="module" src="./app.js"></script>
 </body>
