@@ -1,10 +1,11 @@
 #!/system/bin/sh
-# icbc_daily_water / service.sh v0.9.6  合并守护 + 多 Profile 调度
+# icbc_daily_water / service.sh v0.10.0  合并守护 + 多 Profile 调度
 # 每个 profile 独立: 定时窗口 / DONE(当天已跑) / try(失败计数) / 录制动作回放
 # 内置工行浇水 = 脚本型 profile (water.sh 逻辑, 含检测/重试)
 # 录制型 profile = 到点 亮屏->解锁->开PKG->replay actions.rx
 # 纯 root 直控(sendevent/screencap), 不 hook 不无障碍。
 # FORCE(now.txt 含 profile名,空=内置工行) 无条件且不写 DONE, 永不污染定时。
+# v0.10.0 追加: 跑完任务后自动 force-stop 目标 app 回收内存 (CLEANUP_AFTER/P_CLEANUP)。
 M=/data/adb/modules/icbc_daily_water
 PKG=com.icbc
 LOG=$M/log.txt
@@ -21,6 +22,7 @@ UNLOCK_MODE=${UNLOCK_MODE:-pin}
 OPEN_MODE=${OPEN_MODE:-monkey}
 SLEEP_AFTER=${SLEEP_AFTER:-1}
 WATCH_OPEN=${WATCH_OPEN:-0}
+CLEANUP_AFTER=${CLEANUP_AFTER:-1}
 PIN=${PIN:-}
 PIN_X0=${PIN_X0:-290}
 PIN_Y0=${PIN_Y0:-1015}
@@ -258,6 +260,35 @@ open_pkg() {  # 用 OPEN_MODE 方式拉起指定包
   fi
 }
 
+# ---------- 跑完回收: force-stop 目标 app ----------
+# 目的: 任务结束后目标 app 不再留在后台占内存, 下一次从干净状态启动。
+# 安全边界:
+#   - 只处理本次任务确实打开过的包名; 裸录 profile(P_PKG 为空)没有确定目标, 一律跳过。
+#   - 先按 android 包名字符集校验, 再拒绝系统/桌面等关键包, 避免误杀导致界面异常。
+#   - am force-stop 只杀进程, 不清数据/账号/登录态。
+cleanup_app() {  # $1=包名 $2=profile 名 $3=开关(1/0)
+  CG_PKG=$1; CG_P=$2; CG_ON=$3
+  # 开关关闭也要留一行日志, 否则「为什么我的 app 没退出」无从排查。
+  if [ "$CG_ON" != "1" ]; then
+    echo $(date +%m%d-%H%M) V2_CLEANUP P=$CG_P SKIP=off >> $LOG
+    return 0
+  fi
+  if [ -z "$CG_PKG" ]; then
+    echo $(date +%m%d-%H%M) V2_CLEANUP P=$CG_P SKIP=no-pkg >> $LOG
+    return 0
+  fi
+  case "$CG_PKG" in
+    *[!0-9A-Za-z_.]*) echo $(date +%m%d-%H%M) V2_CLEANUP P=$CG_P SKIP=bad-pkg >> $LOG; return 0;;
+  esac
+  case "$CG_PKG" in
+    android|com.android.systemui|com.android.launcher*|com.miui.home|com.android.settings)
+      echo $(date +%m%d-%H%M) V2_CLEANUP P=$CG_P SKIP=protected >> $LOG; return 0;;
+  esac
+  am force-stop "$CG_PKG" 2>/dev/null
+  echo $(date +%m%d-%H%M) V2_CLEANUP P=$CG_P PKG=$CG_PKG >> $LOG
+  return 0
+}
+
 # HHMM → 当日分钟数 (防前导0八进制坑, 非法值返回0)
 hhmm2m() {
   case "$1" in
@@ -376,11 +407,18 @@ run_profile() {
   PN=$1; FORCEF=$2
   CDIR=$PFX/$PN
   # 读 profile 配置 (P_ 前缀防与全局冲突)
-  P_NAME=; P_TYPE=script; P_PKG=; P_SCHED=; P_ENABLE=
+  P_NAME=; P_TYPE=script; P_PKG=; P_SCHED=; P_ENABLE=; P_CLEANUP=
   [ -f $CDIR/conf ] && . $CDIR/conf 2>/dev/null
   # 录制型 profile 允许 P_PKG 为空: 亮屏回放当前画面, 不强行打开工行。
   # 脚本型 profile 若历史配置缺包名, 仍回退到内置工行。
   if [ "$P_TYPE" = "script" ] && [ -z "$P_PKG" ]; then P_PKG=com.icbc; fi
+  # 清理开关: profile 的 P_CLEANUP 覆盖全局 CLEANUP_AFTER; 非法值一律回退全局。
+  CLEANO=$CLEANUP_AFTER
+  case "$P_CLEANUP" in
+    1) CLEANO=1;;
+    0) CLEANO=0;;
+    *) CLEANO=$CLEANUP_AFTER;;
+  esac
   [ -z "$P_SCHED" ] && P_SCHED=$SCHED_TIME
   PDONE=0
   [ -f $CDIR/state.txt ] && [ "$(cat $CDIR/state.txt 2>/dev/null)" = "$T" ] && PDONE=1
@@ -506,6 +544,10 @@ run_profile() {
     echo $((PCT+1)) > $CDIR/try.txt
     echo $(date +%m%d-%H%M) V2_FAIL$RC P=$PN >> $LOG
   fi
+  # 任务结束(成功/跳过/失败都执行): 回收目标 app 内存, 让它退出后台。
+  # 放在熄屏之前, 保证"清完再熄屏"; 只处理本次真正打开过的包名。
+  # 注: 每日首次打开工行的链路B不走这里 —— 那时用户正在用手机, 不该被踢出 app。
+  cleanup_app "$P_PKG" "$PN" "$CLEANO"
   if [ "${SLEEP_AFTER:-1}" = "1" ]; then
     sleep 3
     svc power stayon false 2>/dev/null
