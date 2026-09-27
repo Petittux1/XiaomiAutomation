@@ -29,7 +29,7 @@ It works by **direct root control** (`screencap` / `getevent` / `sendevent`) —
 
 ## Installation
 
-1. Download `xiaomi-17-pro-automation-v0.12.0.zip` from Releases.
+1. Download `xiaomi-17-pro-automation-v0.12.1.zip` from Releases.
 2. Flash that zip in KernelSU / Magisk.
 3. Reboot, open the module WebUI and set the unlock method and PIN as needed.
 4. For a recorded task, fill in the target app package name; switch to that app and press "Start recording", then press "Stop recording" when you are done.
@@ -46,7 +46,7 @@ id=icbc_daily_water
 
 Do not delete these directories or change the module ID; your configuration, profiles, PIN and recorded actions are carried over.
 
-> If the WebUI still looks stale after upgrading, check the version in the top right — it must read `v0.12.0`. If it does not, the old package was installed.
+> If the WebUI still looks stale after upgrading, check the version in the top right — it must read `v0.12.1`. If it does not, the old package was installed.
 
 ## Usage
 
@@ -137,7 +137,7 @@ bash tools/build_zip.sh
 The script writes the following file into the parent directory:
 
 ```text
-xiaomi-17-pro-automation-v0.12.0.zip
+xiaomi-17-pro-automation-v0.12.1.zip
 ```
 
 ## License

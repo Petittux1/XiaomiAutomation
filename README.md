@@ -29,7 +29,7 @@
 
 ## 安装
 
-1. 从 Releases 下载 `xiaomi-17-pro-automation-v0.12.0.zip`。
+1. 从 Releases 下载 `xiaomi-17-pro-automation-v0.12.1.zip`。
 2. 在 KernelSU / Magisk 中刷入该 zip。
 3. 重启设备后打开模块 WebUI，按需设置解锁方式和 PIN。
 4. 首次使用录制任务时，填写目标 App 包名；切到该 App 后点击「开始录制」，操作完成后点击「停止录制」。
@@ -46,7 +46,7 @@ id=icbc_daily_water
 
 请不要手动删除这些目录或修改模块 ID；配置、Profile、PIN 和录制动作会继续沿用。
 
-> 如果升级后 WebUI 仍显示旧界面，打开模块 WebUI 确认右上角版本号是否为 `v0.12.0`；若不是，说明装的是旧包。
+> 如果升级后 WebUI 仍显示旧界面，打开模块 WebUI 确认右上角版本号是否为 `v0.12.1`；若不是，说明装的是旧包。
 
 ## 使用说明
 
@@ -137,7 +137,7 @@ bash tools/build_zip.sh
 脚本会在仓库父目录生成：
 
 ```text
-xiaomi-17-pro-automation-v0.12.0.zip
+xiaomi-17-pro-automation-v0.12.1.zip
 ```
 
 ## 许可证

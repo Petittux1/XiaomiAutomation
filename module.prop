@@ -1,6 +1,6 @@
 id=icbc_daily_water
 name=Xiaomi 17 Pro 自动化模块
-version=v0.12.0
-versionCode=1120
+version=v0.12.1
+versionCode=1121
 author=petittux
-description=Xiaomi 17 Pro / HyperOS 4 root automation module: multi-profile scheduler + record/replay for any app, with a built-in ICBC daily watering task (07:30 by default). Pure root control (sendevent/screencap/getevent), no hooks, no accessibility. Multilingual WebUI: zh/en/fr/ru. v0.11.0 added a device profile layer (screen size / display ID / lock-keypad geometry) so record, replay and PIN auto-unlock can be used on other HyperOS 4 phones. v0.12.0 refreshes the WebUI (status summary + collapsible sections) and makes it self-heal its own document cache, so module updates no longer need an uninstall/reinstall cycle.
+description=Xiaomi 17 Pro / HyperOS 4 root automation module: multi-profile scheduler + record/replay for any app, with a built-in ICBC daily watering task (07:30 by default). Pure root control (sendevent/screencap/getevent), no hooks, no accessibility. Multilingual WebUI: zh/en/fr/ru. v0.11.0 added a device profile layer (screen size / display ID / lock-keypad geometry) so record, replay and PIN auto-unlock can be used on other HyperOS 4 phones. v0.12.0 refreshed the WebUI (status summary + collapsible sections) and made it self-heal its own document cache. v0.12.1 fixes profile names stacking one glyph per line in Chinese on narrow screens.

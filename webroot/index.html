@@ -101,13 +101,16 @@
   button.small { padding: 7px 11px; font-size: 12px; }
   button:active { opacity: .75; }
 
-  /* 开关行: 文字在左, 勾选框在右, 整行可点 */
+  /* 开关行: 文字在左, 勾选框在右, 整行可点。
+     wrap + min-width:0 是防竖排的通用保险: 文案再长也是整字换行到下一行,
+     而不会被压成一个字宽 —— 中文可以在任意两字间断行, 宽度被压到 1 个字时
+     就会变成竖着排。拉丁文不肯断词所以看不出来, 但那只是没暴露而已。 */
   .sw {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    padding: 11px 2px; border-top: 1px solid var(--line); cursor: pointer;
+    flex-wrap: wrap; padding: 11px 2px; border-top: 1px solid var(--line); cursor: pointer;
   }
   .sw:first-child { border-top: none; }
-  .sw span { font-size: 14px; }
+  .sw span { font-size: 14px; min-width: 0; }
   .sw input[type=checkbox] { flex: none; width: 22px; height: 22px; accent-color: var(--acc); }
 
   pre {
@@ -121,17 +124,23 @@
   /* ---------- 触发检查 ---------- */
   .ck {
     display: flex; justify-content: space-between; align-items: center; gap: 10px;
-    padding: 9px 2px; border-top: 1px solid var(--line); font-size: 13px;
+    flex-wrap: wrap; padding: 9px 2px; border-top: 1px solid var(--line); font-size: 13px;
   }
   .ck:first-child { border-top: none; }
+  .ck > :first-child { min-width: 0; }
   .ck .ok { color: var(--ok); font-weight: 600; }
   .ck .bad { color: var(--warn); font-weight: 600; }
 
   /* ---------- 任务卡 ---------- */
   .prof { background: var(--card2); border: 1px solid var(--line); border-radius: 13px; padding: 11px 12px; margin-top: 10px; }
   .prof:first-child { margin-top: 0; }
-  .prof .ph { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-  .prof .pn { font-weight: 700; font-size: 14px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* 任务名独占一行: nowrap 保证任何语言都只占一行, 永远不会被挤成竖排。
+     放不下就省略号, 完整名字仍在 title 里, 长按可见。 */
+  .prof .pn {
+    display: block; font-weight: 700; font-size: 14px; line-height: 1.4;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .prof .pbadges { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
   .prof .pm { font-size: 11px; color: var(--mut); margin-top: 7px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .prof .prow2 {
     display: flex; align-items: center; gap: 7px; margin-top: 9px;

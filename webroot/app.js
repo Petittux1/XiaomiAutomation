@@ -196,8 +196,12 @@ async function loadProfiles() {
       ? '<span class="pill' + (cleanOn ? ' ok' : ' warn') + '">🧹 ' + esc(cleanOn ? t('opt.cleanup.on') : t('opt.cleanup.off')) + '</span>'
       : '';
     return '<div class="prof" data-slug="' + esc(p.slug) + '">' +
-      '<div class="ph">' +
-        '<span class="pn">' + esc(p.pname || p.slug) + '</span>' +
+      // 任务名独占一整行。名字和徽标挤在同一个 flex 行里时, 窄屏(17 Pro 约
+      // 348dp)上徽标会把名字挤到只剩几像素, 而 min-width:0 又允许它继续缩 ——
+      // 中文可以在任意两个字之间断行, 于是变成一个字一行竖着排; 拉丁文不肯断词
+      // 所以看不出来。独占一行 + nowrap 从根上避免这件事。
+      '<span class="pn" title="' + esc(p.pname || p.slug) + '">' + esc(p.pname || p.slug) + '</span>' +
+      '<div class="pbadges">' +
         '<span class="pill">' + esc(isScript ? t('prof.script') : t('prof.record')) + '</span>' +
         doneBadge +
         cleanBadge +
