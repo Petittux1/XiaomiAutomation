@@ -27,6 +27,8 @@
   .row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
   .rowwrap { flex-wrap: wrap; }
   .flex1 { flex: 1; }
+  .fld { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--mut); flex: 1; min-width: 88px; }
+  .fld input { width: 100%; }
   input[type=time], input[type=password], input[type=number], input[type=text], select {
     background: #0d1119; color: var(--fg); border: 1px solid var(--line);
     border-radius: 10px; padding: 10px 12px; font-size: 14px; flex: 1; min-width: 0;
@@ -86,6 +88,7 @@
     <h2 data-i18n="card.prof.title">📁 任务 Profiles</h2>
     <p class="hint" data-i18n="card.prof.hint">每个任务独立定时。内置「工行定时浇水」为脚本型；新建为录制型：包名非空时切到目标 app 后开始，离开暂停、回来继续；包名留空则亮屏录全量。要录左右边缘返回请填写目标包名；裸录会按规则过滤边缘滑动。锁屏自动暂停，全部录完点停止即可</p>
     <div id="profs"></div>
+    <p class="hint" data-i18n="scale.hint" style="margin: 6px 0 0"></p>
     <div class="row rowwrap">
       <input type="text" id="npName" data-i18n-ph="ph.npName" placeholder="新任务名(如 支付宝浇水)" class="flex1">
       <input type="text" id="npPkg" data-i18n-ph="ph.npPkg" placeholder="包名（可留空：亮屏全量录）" class="flex1">
@@ -108,6 +111,37 @@
         <option value="swipe" data-i18n="opt.swipe">上滑解锁（无密码）</option>
       </select>
     </label>
+  </section>
+
+  <section class="card">
+    <h2 data-i18n="dev.title">📱 设备档案</h2>
+    <p class="hint" data-i18n="dev.hint"></p>
+    <div class="row rowwrap">
+      <span class="pill" id="devBadge">—</span>
+      <label class="switchrow" style="flex:1"><span data-i18n="dev.apply">启用覆盖</span><input type="checkbox" id="devApply"></label>
+    </div>
+    <p class="hint" data-i18n="dev.apply.hint" style="margin: 4px 0 8px;"></p>
+    <div class="row rowwrap">
+      <input type="text" id="devModel" data-i18n-ph="dev.model" placeholder="机型标识" class="flex1">
+      <input type="text" id="devLabel" data-i18n-ph="dev.label" placeholder="显示名" class="flex1">
+      <button class="ghost" id="btnDevDetect" data-i18n="dev.detect">🔍 自动检测本机</button>
+    </div>
+    <div class="row rowwrap" style="margin-top:8px">
+      <label class="fld"><span data-i18n="dev.sw">屏宽</span><input type="number" id="devSW" min="300" step="1"></label>
+      <label class="fld"><span data-i18n="dev.sh">屏高</span><input type="number" id="devSH" min="300" step="1"></label>
+      <label class="fld"><span data-i18n="dev.d">显示 ID</span><input type="number" id="devD" min="0" step="1"></label>
+      <label class="fld"><span data-i18n="dev.dpi">界面密度</span><input type="number" id="devDPI" min="0" step="1"></label>
+    </div>
+    <div class="row rowwrap" style="margin-top:8px">
+      <span style="font-size:12px;color:var(--mut)" data-i18n="dev.pin">锁屏密码宫格</span>
+      <input type="number" id="devPX0" min="1" step="1">
+      <input type="number" id="devPY0" min="1" step="1">
+      <input type="number" id="devPDX" min="1" step="1">
+      <input type="number" id="devPDY" min="1" step="1">
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="btnDevSave" data-i18n="btn.save">保存</button>
+    </div>
   </section>
 
   <section class="card">

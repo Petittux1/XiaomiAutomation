@@ -22,12 +22,13 @@ It works by **direct root control** (`screencap` / `getevent` / `sendevent`) —
 - On replay it handles waking the screen, unlocking, launching the target app and confirming the foreground, then restores rotation lock, stay-awake and the screen timeout.
 - **Background cleanup after each run**: the target app is closed with `am force-stop` when the task ends, so it stops holding memory and the next task starts clean. One global switch, plus a per-task override.
 - **Multilingual WebUI**: Chinese / English / Français / Русский, switchable from the top right; the choice is remembered.
+- **Multi-device support**: a device-profile layer can adjust screen size, display ID and the lock-screen keypad geometry per model, so recording, replay and PIN auto-unlock also work on other HyperOS 4 phones. The Xiaomi 17 Pro measured baseline is kept exactly as it is and is not affected.
 - **WebUI updates with the module**: assets carry a version tag and caching is disabled, so you never have to uninstall and reinstall.
 - The PIN is written only to the on-device config and never appears in the status output, the log or the source.
 
 ## Installation
 
-1. Download `xiaomi-17-pro-automation-v0.10.0.zip` from Releases.
+1. Download `xiaomi-17-pro-automation-v0.11.0.zip` from Releases.
 2. Flash that zip in KernelSU / Magisk.
 3. Reboot, open the module WebUI and set the unlock method and PIN as needed.
 4. For a recorded task, fill in the target app package name; switch to that app and press "Start recording", then press "Stop recording" when you are done.
@@ -44,7 +45,7 @@ id=icbc_daily_water
 
 Do not delete these directories or change the module ID; your configuration, profiles, PIN and recorded actions are carried over.
 
-> If the WebUI still looks stale after upgrading, check the version in the top right — it must read `v0.10.0`. If it does not, the old package was installed.
+> If the WebUI still looks stale after upgrading, check the version in the top right — it must read `v0.11.0`. If it does not, the old package was installed.
 
 ## Usage
 
@@ -82,9 +83,23 @@ The dropdown in the top right switches between Chinese / English / Français / �
 
 ## Devices and calibration
 
-The default target device is the Xiaomi 17 Pro. The module discovers the touch device through `getevent -p` and converts coordinates from the touch axis range. `water.sh` holds the target display size and the ICBC flow coordinates; recalibrate before switching devices.
+The default target device is the Xiaomi 17 Pro. The module discovers the touch device through `getevent -p` and converts coordinates from the touch axis range.
 
-> Every model other than the Xiaomi 17 Pro is currently **under testing**: resolution, DPI and system bar heights all affect the UI layout, so changing the resolution alone is not enough to make the ICBC flow work. Do not try it on a daily-driver phone.
+### Moving to another phone: the device profile
+
+The "📱 Device profile" card affects exactly three things: **screen width/height, display ID, and the lock-screen keypad geometry**. Those are what decide whether recording, replay and PIN auto-unlock work, and they differ on other phones, so they need their own values.
+
+- **Xiaomi 17 Pro**: the card already holds the measured values — **leave them alone**. Keep "Enable override" off and the module uses the original values from `water.sh` / `sched.conf`.
+- **Other HyperOS 4 models** (Xiaomi 17, 17 Pro Max, …): press "🔍 Auto-detect this phone" to fill in `wm size` and `wm density`, check the numbers, then tick "Enable override" and save. The lock-screen keypad cannot be detected reliably, so fill it in by hand — otherwise the 17 Pro values are used and the wrong digits get tapped.
+- The profile lives in `/data/adb/icbc_water/device.conf`. `DEV_APPLY=0` (the default) means "no override, use the 17 Pro baseline"; only `DEV_APPLY=1` turns the override on. Every value must pass a "unique + digits only" check, so a mistake or a corrupted file can at worst leave the override inactive — it cannot break the watering flow.
+
+> **Every model other than the Xiaomi 17 Pro is "testing".** Resolution, DPI and system bar heights all affect the UI layout, so: **the ICBC flow is not guaranteed to work**; but **recording, replay and PIN auto-unlock work normally**. Do not try it on a daily-driver phone.
+
+### Replaying actions recorded on another phone
+
+Each recorded task has a "No scaling / Scale to screen" dropdown. If a task was recorded on a phone with a **different resolution** and you want to replay it here, pick "Scale to screen" — the module reads the resolution recorded in the file header and converts every coordinate proportionally. The default is "No scaling", so recording and replaying on the same phone is unaffected.
+
+### ICBC flow coordinates
 
 The pixel probes and coordinates of the ICBC flow live in the config block at the top of `water.sh`. A helper script is included to inspect pixel colours in a screenshot:
 
@@ -104,6 +119,7 @@ python3 tools/px.py screen.png 216,778 518,780 746,748
 | `webctl.sh` | WebUI root command interface |
 | `webroot/` | KernelSU WebUI page, scripts and translation dictionaries |
 | `sched.conf` | Default config template (the live config lives in `/data/adb/icbc_water/`) |
+| `device.conf` | Device profile template (the live one lives in `/data/adb/icbc_water/device.conf`) |
 | `customize.sh` | Install/upgrade flow, permissions and WebUI integrity check |
 | `tools/px.py` | Screenshot pixel calibration helper |
 | `tools/run_once.sh` | Run the built-in ICBC flow manually |
@@ -120,7 +136,7 @@ bash tools/build_zip.sh
 The script writes the following file into the parent directory:
 
 ```text
-xiaomi-17-pro-automation-v0.10.0.zip
+xiaomi-17-pro-automation-v0.11.0.zip
 ```
 
 ## License

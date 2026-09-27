@@ -17,7 +17,7 @@ CACHE_TAG="v${VC}"
 rm -f "$OUT"
 mkdir -p "$STAGE/tools" "$STAGE/webroot"
 cp "$ROOT"/module.prop "$ROOT"/service.sh "$ROOT"/water.sh "$ROOT"/record.sh "$ROOT"/replay.sh \
-   "$ROOT"/webctl.sh "$ROOT"/sched.conf "$ROOT"/customize.sh \
+   "$ROOT"/webctl.sh "$ROOT"/sched.conf "$ROOT"/device.conf "$ROOT"/customize.sh \
    "$ROOT"/README.md "$ROOT"/README.en.md "$ROOT"/README.fr.md \
    "$ROOT"/LICENSE "$ROOT"/.gitignore "$STAGE/"
 cp "$ROOT"/webroot/* "$STAGE/webroot/"
@@ -56,10 +56,27 @@ done
 
 chmod 755 "$STAGE"/service.sh "$STAGE"/water.sh "$STAGE"/record.sh "$STAGE"/replay.sh \
   "$STAGE"/webctl.sh "$STAGE"/customize.sh "$STAGE"/tools/run_once.sh
-chmod 644 "$STAGE"/module.prop "$STAGE"/sched.conf "$STAGE"/README.md \
-  "$STAGE"/README.en.md "$STAGE"/README.fr.md "$STAGE"/LICENSE \
+chmod 644 "$STAGE"/module.prop "$STAGE"/sched.conf "$STAGE"/device.conf \
+  "$STAGE"/README.md "$STAGE"/README.en.md "$STAGE"/README.fr.md "$STAGE"/LICENSE \
   "$STAGE"/.gitignore "$STAGE"/tools/px.py "$STAGE"/webroot/*
 
 (cd "$STAGE" && zip -qr "$OUT" .)
+
+# ---------- 产物自检 ----------
+# 少一个文件, 装上去就要么白屏、要么设备档案初始化不出来, 所以在这里拦住。
+for f in module.prop service.sh water.sh record.sh replay.sh webctl.sh \
+         sched.conf device.conf customize.sh \
+         README.md README.en.md README.fr.md \
+         webroot/index.html webroot/app.js webroot/i18n.js webroot/kernelsu.js; do
+  unzip -l "$OUT" | grep -qF " $f" || { echo "构建失败: 产物缺少 $f" >&2; exit 1; }
+done
+# 设备档案模板必须是「不覆盖」状态: 装了包的新用户不该一上来就被别的机型参数接管。
+grep -qE '^DEV_APPLY=0$' "$STAGE/device.conf" || {
+  echo "构建失败: device.conf 模板的 DEV_APPLY 必须是 0(17 Pro 基线)" >&2; exit 1; }
+# 明文 PIN / 密钥不得出现在包内任何文件
+if grep -rIlE '(api[_-]?key|secret[_-]?key|bearer +[A-Za-z0-9]|BEGIN +RSA)' "$STAGE" 2>/dev/null | grep -q .; then
+  echo "构建失败: 产物里出现疑似密钥" >&2; exit 1
+fi
+
 echo "已生成: $OUT"
 echo "WebUI 缓存标记: $CACHE_TAG"

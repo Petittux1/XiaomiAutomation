@@ -15,6 +15,20 @@ fi
 chmod 600 $CFG 2>/dev/null
 chmod 755 $MODDIR/service.sh $MODDIR/water.sh $MODDIR/webctl.sh $MODDIR/record.sh $MODDIR/replay.sh 2>/dev/null
 
+# 设备档案: 只在缺失时用模块内的模板初始化一次。
+# 关键: 已存在的 device.conf 绝不覆盖 —— 用户在 WebUI 里选好的机型不能在升级时丢。
+# 模板里 DEV_APPLY=0, 即保持 Xiaomi 17 Pro 的实测基线, 各脚本不读 DEV_* 覆盖项。
+DEVCFG=$CFGDIR/device.conf
+if [ ! -f $DEVCFG ]; then
+  cp $MODDIR/device.conf $DEVCFG 2>/dev/null || {
+    printf 'DEV_APPLY=0\nDEV_MODEL=17pro\nDEV_STATUS=stable\n' > $DEVCFG 2>/dev/null
+  }
+  echo "- 设备档案已初始化 (DEV_APPLY=0, 17 Pro 基线)"
+else
+  echo "- 设备档案已存在, 保持不变 (DEV_APPLY=$(grep -m1 '^DEV_APPLY=' $DEVCFG 2>/dev/null | cut -d= -f2))"
+fi
+chmod 600 $DEVCFG 2>/dev/null
+
 # Profiles 目录 + 内置工行脚本型 profile (防重装后丢失)
 mkdir -p $PFX 2>/dev/null
 if [ ! -f $PFX/icbc/conf ]; then

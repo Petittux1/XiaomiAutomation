@@ -130,6 +130,31 @@ const zh = {
   'toast.err': '操作失败：{err}',
 
   'log.empty': '(no log yet)',
+
+  // v0.11.0 设备档案 / 跨设备回放缩放
+  'dev.title': "📱 设备档案",
+  'dev.hint': "只影响屏幕尺寸、显示 ID 和锁屏密码宫格位置，用来适配别的机器。Xiaomi 17 Pro 用下面这套已实测的值，不要改。除 17 Pro 外的机型都标「测试中」：工行流程不保证可用，但录制、回放和 PIN 自动解锁可正常使用。",
+  'dev.model': "机型",
+  'dev.label': "显示名",
+  'dev.apply': "启用覆盖",
+  'dev.apply.hint': "关闭＝用 17 Pro 的实测基线值（推荐）。开启＝用下面填的数值。",
+  'dev.sw': "屏宽 (px)",
+  'dev.sh': "屏高 (px)",
+  'dev.d': "显示 ID",
+  'dev.dpi': "界面密度 (DPI)",
+  'dev.pin': "锁屏密码宫格",
+  'dev.detect': "🔍 自动检测本机",
+  'dev.detect.ok': "已检测到本机参数，请确认后保存",
+  'dev.detect.fail': "参数不合法，请检查后重填",
+  'dev.stable': "稳定",
+  'dev.testing': "测试中",
+  'dev.saved': "设备档案已保存",
+  'scale.title': "📐 跨设备回放缩放",
+  'scale.hint': "把别的机器上录的动作按分辨率比例换算后再回放。默认关闭；只有当任务是在分辨率不同的机器上录的才需要开。",
+  'opt.scale.off': "不缩放",
+  'opt.scale.on': "按比例缩放",
+  'toast.profScaleSaved': "该任务的缩放设置已保存",
+
   'foot.ver': '模块 {ver} · 语言 {lang}',
 };
 
@@ -250,6 +275,31 @@ const en = {
   'toast.err': 'Operation failed: {err}',
 
   'log.empty': '(no log yet)',
+
+  // v0.11.0 设备档案 / 跨设备回放缩放
+  'dev.title': "📱 Device profile",
+  'dev.hint': "Only affects screen size, display ID and the lock-screen keypad layout, so the module can be used on other phones. Xiaomi 17 Pro uses the measured values below — do not change them. Models other than 17 Pro are marked \"testing\": the ICBC flow is not guaranteed there, but recording, replay and PIN auto-unlock work normally.",
+  'dev.model': "Model",
+  'dev.label': "Display name",
+  'dev.apply': "Enable override",
+  'dev.apply.hint': "Off = use the measured 17 Pro baseline (recommended). On = use the values below.",
+  'dev.sw': "Width (px)",
+  'dev.sh': "Height (px)",
+  'dev.d': "Display ID",
+  'dev.dpi': "Density (DPI)",
+  'dev.pin': "Lock-screen keypad",
+  'dev.detect': "🔍 Auto-detect this phone",
+  'dev.detect.ok': "Detected this phone's values — review and save",
+  'dev.detect.fail': "Invalid value, please check and re-enter",
+  'dev.stable': "Stable",
+  'dev.testing': "Testing",
+  'dev.saved': "Device profile saved",
+  'scale.title': "📐 Cross-device replay scaling",
+  'scale.hint': "Convert actions recorded on another phone to this screen's resolution before replaying. Off by default; only needed when the task was recorded on a phone with a different resolution.",
+  'opt.scale.off': "No scaling",
+  'opt.scale.on': "Scale to screen",
+  'toast.profScaleSaved': "Scaling setting saved for this task",
+
   'foot.ver': 'Module {ver} · Language {lang}',
 };
 
@@ -370,6 +420,31 @@ const fr = {
   'toast.err': 'Échec de l\'opération : {err}',
 
   'log.empty': '(no log yet)',
+
+  // v0.11.0 设备档案 / 跨设备回放缩放
+  'dev.title': "📱 Profil d'appareil",
+  'dev.hint': "N'affecte que la taille de l'écran, l'identifiant d'affichage et le pavé numérique de l'écran de verrouillage, afin d'utiliser le module sur d'autres téléphones. Le Xiaomi 17 Pro utilise les valeurs mesurées ci-dessous — ne les modifiez pas. Les modèles autres que le 17 Pro sont marqués « en test » : le parcours ICBC n'y est pas garanti, mais l'enregistrement, la relecture et le déverrouillage PIN fonctionnent normalement.",
+  'dev.model': "Modèle",
+  'dev.label': "Nom affiché",
+  'dev.apply': "Activer le remplacement",
+  'dev.apply.hint': "Désactivé = valeurs de référence mesurées du 17 Pro (recommandé). Activé = les valeurs ci-dessous.",
+  'dev.sw': "Largeur (px)",
+  'dev.sh': "Hauteur (px)",
+  'dev.d': "ID d'affichage",
+  'dev.dpi': "Densité (DPI)",
+  'dev.pin': "Pavé de l'écran de verrouillage",
+  'dev.detect': "🔍 Détecter ce téléphone",
+  'dev.detect.ok': "Valeurs de ce téléphone détectées — vérifiez et enregistrez",
+  'dev.detect.fail': "Valeur invalide, vérifiez et saisissez à nouveau",
+  'dev.stable': "Stable",
+  'dev.testing': "En test",
+  'dev.saved': "Profil d'appareil enregistré",
+  'scale.title': "📐 Mise à l'échelle entre appareils",
+  'scale.hint': "Convertit les gestes enregistrés sur un autre téléphone vers la résolution de cet écran avant la relecture. Désactivé par défaut ; nécessaire seulement si la tâche a été enregistrée sur un téléphone de résolution différente.",
+  'opt.scale.off': "Sans mise à l'échelle",
+  'opt.scale.on': "Mettre à l'échelle",
+  'toast.profScaleSaved': "Réglage d'échelle enregistré pour cette tâche",
+
   'foot.ver': 'Module {ver} · Langue {lang}',
 };
 
@@ -490,6 +565,31 @@ const ru = {
   'toast.err': 'Ошибка: {err}',
 
   'log.empty': '(no log yet)',
+
+  // v0.11.0 设备档案 / 跨设备回放缩放
+  'dev.title': "📱 Профиль устройства",
+  'dev.hint': "Влияет только на размер экрана, ID дисплея и раскладку цифровой клавиатуры на экране блокировки — чтобы модуль работал на других телефонах. Xiaomi 17 Pro использует измеренные значения ниже — не меняйте их. Модели кроме 17 Pro помечены «тестируется»: сценарий ICBC там не гарантирован, но запись, воспроизведение и разблокировка по PIN работают нормально.",
+  'dev.model': "Модель",
+  'dev.label': "Отображаемое имя",
+  'dev.apply': "Включить переопределение",
+  'dev.apply.hint': "Выключено = базовые измеренные значения 17 Pro (рекомендуется). Включено = значения ниже.",
+  'dev.sw': "Ширина (px)",
+  'dev.sh': "Высота (px)",
+  'dev.d': "ID дисплея",
+  'dev.dpi': "Плотность (DPI)",
+  'dev.pin': "Клавиатура экрана блокировки",
+  'dev.detect': "🔍 Определить этот телефон",
+  'dev.detect.ok': "Параметры телефона определены — проверьте и сохраните",
+  'dev.detect.fail': "Недопустимое значение, проверьте и введите снова",
+  'dev.stable': "Стабильно",
+  'dev.testing': "Тестируется",
+  'dev.saved': "Профиль устройства сохранён",
+  'scale.title': "📐 Масштабирование между устройствами",
+  'scale.hint': "Пересчитывает действия, записанные на другом телефоне, под разрешение этого экрана перед воспроизведением. По умолчанию выключено; нужно только если задача записана на телефоне с другим разрешением.",
+  'opt.scale.off': "Без масштаба",
+  'opt.scale.on': "Масштабировать",
+  'toast.profScaleSaved': "Настройка масштаба сохранена для этой задачи",
+
   'foot.ver': 'Модуль {ver} · Язык {lang}',
 };
 

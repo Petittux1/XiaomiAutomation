@@ -22,12 +22,13 @@ Il fonctionne par **contrôle root direct** (`screencap` / `getevent` / `sendeve
 - À la relecture, le module gère le réveil de l'écran, le déverrouillage, le lancement de l'application cible et la confirmation du premier plan, puis restaure le verrouillage d'orientation, le maintien d'éveil et le délai d'extinction.
 - **Nettoyage de l'arrière-plan après chaque exécution** : l'application cible est fermée avec `am force-stop` à la fin de la tâche, afin qu'elle ne retienne plus de mémoire et que la tâche suivante démarre dans un état propre. Un interrupteur global, plus une surcharge par tâche.
 - **WebUI multilingue** : chinois / English / Français / Русский, sélectionnable en haut à droite ; le choix est mémorisé.
+- **Prise en charge de plusieurs appareils** : une couche de profil d'appareil permet d'ajuster par modèle la taille de l'écran, l'ID d'affichage et la disposition du pavé numérique de l'écran de verrouillage, afin que l'enregistrement, la relecture et le déverrouillage PIN fonctionnent aussi sur d'autres téléphones HyperOS 4. La base mesurée du Xiaomi 17 Pro est conservée telle quelle et n'est pas affectée.
 - **Le WebUI se met à jour avec le module** : les ressources portent une version et la mise en cache est désactivée, plus besoin de désinstaller puis réinstaller.
 - Le code PIN n'est écrit que dans la configuration locale et n'apparaît jamais dans l'état, le journal ni le code source.
 
 ## Installation
 
-1. Téléchargez `xiaomi-17-pro-automation-v0.10.0.zip` depuis les Releases.
+1. Téléchargez `xiaomi-17-pro-automation-v0.11.0.zip` depuis les Releases.
 2. Flashez ce zip dans KernelSU / Magisk.
 3. Redémarrez, ouvrez le WebUI du module et réglez la méthode de déverrouillage et le code PIN selon vos besoins.
 4. Pour une tâche enregistrée, renseignez le nom de package de l'application cible ; basculez vers cette application et appuyez sur « Démarrer l'enregistrement », puis sur « Arrêter l'enregistrement » lorsque vous avez terminé.
@@ -44,7 +45,7 @@ id=icbc_daily_water
 
 Ne supprimez pas ces répertoires et ne modifiez pas l'identifiant du module ; votre configuration, vos profils, votre code PIN et vos actions enregistrées sont conservés.
 
-> Si le WebUI semble encore obsolète après la mise à jour, vérifiez la version en haut à droite : elle doit indiquer `v0.10.0`. Sinon, l'ancien paquet a été installé.
+> Si le WebUI semble encore obsolète après la mise à jour, vérifiez la version en haut à droite : elle doit indiquer `v0.11.0`. Sinon, l'ancien paquet a été installé.
 
 ## Utilisation
 
@@ -82,9 +83,23 @@ Le menu déroulant en haut à droite permet de basculer entre chinois / English 
 
 ## Appareils et calibrage
 
-L'appareil cible par défaut est le Xiaomi 17 Pro. Le module détecte l'appareil tactile via `getevent -p` et convertit les coordonnées à partir de la plage des axes tactiles. `water.sh` conserve la taille d'affichage cible et les coordonnées du parcours ICBC ; il faut recalibrer avant de changer d'appareil.
+L'appareil cible par défaut est le Xiaomi 17 Pro. Le module détecte l'appareil tactile via `getevent -p` et convertit les coordonnées à partir de la plage des axes tactiles.
 
-> Tous les modèles autres que le Xiaomi 17 Pro sont actuellement **en cours de test** : la résolution, le DPI et la hauteur des barres système influencent la mise en page de l'interface, si bien que changer la seule résolution ne suffit pas à faire fonctionner le parcours ICBC. Ne l'essayez pas sur votre téléphone principal.
+### Changer de téléphone : le profil d'appareil
+
+La carte « 📱 Profil d'appareil » agit sur exactement trois choses : **la largeur et la hauteur de l'écran, l'ID d'affichage et la disposition du pavé numérique de l'écran de verrouillage**. Ce sont ces valeurs qui déterminent si l'enregistrement, la relecture et le déverrouillage PIN fonctionnent ; elles diffèrent sur les autres téléphones et demandent donc leurs propres valeurs.
+
+- **Xiaomi 17 Pro** : la carte contient déjà les valeurs mesurées — **n'y touchez pas**. Laissez « Activer le remplacement » désactivé et le module utilise les valeurs d'origine de `water.sh` / `sched.conf`.
+- **Autres modèles HyperOS 4** (Xiaomi 17, 17 Pro Max, …) : appuyez sur « 🔍 Détecter ce téléphone » pour remplir `wm size` et `wm density`, vérifiez les valeurs, puis cochez « Activer le remplacement » et enregistrez. Le pavé numérique de l'écran de verrouillage ne peut pas être détecté de façon fiable : remplissez-le à la main — sinon les valeurs du 17 Pro sont utilisées et les mauvais chiffres sont tapés.
+- Le profil se trouve dans `/data/adb/icbc_water/device.conf`. `DEV_APPLY=0` (par défaut) signifie « pas de remplacement, on utilise la base du 17 Pro » ; seul `DEV_APPLY=1` active le remplacement. Chaque valeur doit passer un contrôle « unique + chiffres uniquement » : une erreur ou un fichier corrompu laisse au pire le remplacement inactif — il ne peut pas casser le processus d'arrosage.
+
+> **Tous les modèles autres que le Xiaomi 17 Pro sont « en test ».** La résolution, le DPI et la hauteur des barres système influencent la mise en page de l'interface, par conséquent : **le parcours ICBC n'est pas garanti** ; mais **l'enregistrement, la relecture et le déverrouillage PIN fonctionnent normalement**. Ne l'essayez pas sur votre téléphone principal.
+
+### Relire des actions enregistrées sur un autre téléphone
+
+Chaque tâche enregistrée dispose d'une liste « Sans mise à l'échelle / Mettre à l'échelle ». Si une tâche a été enregistrée sur un téléphone à la **résolution différente** et que vous souhaitez la relire ici, choisissez « Mettre à l'échelle » : le module lit la résolution inscrite dans l'en-tête du fichier et convertit chaque coordonnée proportionnellement. Le réglage par défaut est « Sans mise à l'échelle » : un enregistrement puis une relecture sur le même téléphone ne sont donc pas affectés.
+
+### Coordonnées du parcours ICBC
 
 Les sondes de pixels et les coordonnées du parcours ICBC sont regroupées dans le bloc de configuration en haut de `water.sh`. Un script utilitaire est fourni pour inspecter la couleur des pixels d'une capture :
 
@@ -104,6 +119,7 @@ python3 tools/px.py screen.png 216,778 518,780 746,748
 | `webctl.sh` | Interface de commandes root pour le WebUI |
 | `webroot/` | Page WebUI KernelSU, scripts et dictionnaires de traduction |
 | `sched.conf` | Modèle de configuration par défaut (la configuration active est dans `/data/adb/icbc_water/`) |
+| `device.conf` | Modèle de profil d'appareil (le fichier actif est dans `/data/adb/icbc_water/device.conf`) |
 | `customize.sh` | Flux d'installation/mise à jour, permissions et contrôle d'intégrité du WebUI |
 | `tools/px.py` | Outil de calibrage par pixel d'une capture |
 | `tools/run_once.sh` | Exécution manuelle du parcours ICBC intégré |
@@ -120,7 +136,7 @@ bash tools/build_zip.sh
 Le script écrit le fichier suivant dans le répertoire parent :
 
 ```text
-xiaomi-17-pro-automation-v0.10.0.zip
+xiaomi-17-pro-automation-v0.11.0.zip
 ```
 
 ## Licence

@@ -104,6 +104,22 @@ disc_geo() {
   case "$SW" in ''|*[!0-9]*) SW=1220;; esac
   SH=$(sed -n 's/^SH=\([0-9][0-9]*\).*/\1/p' $M/water.sh 2>/dev/null | head -1)
   case "$SH" in ''|*[!0-9]*) SH=2656;; esac
+  # 设备档案覆盖: DEV_APPLY=0(默认, 17 Pro)时本段不执行, SW/SH 就是 water.sh 的实测值。
+  # 覆盖值要求「唯一 + 纯数字 + 下限」, 不合格就保留上面已经兜底好的值。
+  # 重复键视为歧义配置: head -1 会让「后面追加一行」悄悄改掉生效值, 不接受这种写法。
+  DEVCONF=/data/adb/icbc_water/device.conf
+  devpick() {
+    [ -f "$DEVCONF" ] || return 0
+    [ "$(grep -c "^$1=" "$DEVCONF" 2>/dev/null)" = "1" ] || return 0
+    sed -n "s/^$1=\([0-9][0-9]*\)$/\1/p" "$DEVCONF" 2>/dev/null | head -1
+  }
+  if [ "$(grep -c '^DEV_APPLY=' "$DEVCONF" 2>/dev/null)" = "1" ] \
+     && [ "$(sed -n 's/^DEV_APPLY=\(1\)$/1/p' "$DEVCONF" 2>/dev/null | head -1)" = "1" ]; then
+    DV_SW=$(devpick DEV_SW)
+    DV_SH=$(devpick DEV_SH)
+    if [ -n "$DV_SW" ] && [ "$DV_SW" -ge 300 ] 2>/dev/null; then SW=$DV_SW; fi
+    if [ -n "$DV_SH" ] && [ "$DV_SH" -ge 300 ] 2>/dev/null; then SH=$DV_SH; fi
+  fi
   if [ -n "$TDEV" ] && [ -e "$TDEV" ]; then
     P=$(getevent -p $TDEV 2>/dev/null)
     # getevent -p 的 ABS 摘要行可能同时列出 0035/0036；必须取
@@ -387,6 +403,21 @@ _daemon() {
     READY=1; log "READY 未设目标app, 亮屏即录"   # 未设 PKG = 亮屏即开录 (任意 app)
   fi
   : > $TMP
+  # 写入录制几何头 #RX1, 供跨设备回放按比例换算坐标。
+  # 写成 # 注释行是刻意的: replay 主循环跳过 # 开头的行, rec_count_rx 的动作统计
+  # 只认 ^W[0-9]+, webctl 的 pacts 统计同样只认 ^W[0-9]+ —— 三处都不会把头当动作。
+  # 老版本 replay 读到这个文件也只是照常跳过, 行为与现在完全一致(向后兼容)。
+  RXH_DPI=
+  if [ -n "$DEVCONF" ] && [ -f "$DEVCONF" ] \
+     && [ "$(grep -c '^DEV_APPLY=' "$DEVCONF" 2>/dev/null)" = "1" ] \
+     && [ "$(sed -n 's/^DEV_APPLY=\(1\)$/1/p' "$DEVCONF" 2>/dev/null | head -1)" = "1" ]; then
+    RXH_DPI=$(sed -n 's/^DEV_DPI=\([0-9][0-9]*\)$/\1/p' "$DEVCONF" 2>/dev/null | head -1)
+  fi
+  if [ -n "$RXH_DPI" ]; then
+    printf '#RX1 SW=%s SH=%s K=%s DPI=%s\n' "$SW" "$SH" "$K" "$RXH_DPI" >> $TMP
+  else
+    printf '#RX1 SW=%s SH=%s K=%s\n' "$SW" "$SH" "$K" >> $TMP
+  fi
   CNT=0
   LASTCHK=0
   getevent -t $TDEV 2>/dev/null | while IFS= read -r line; do

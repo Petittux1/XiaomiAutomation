@@ -156,6 +156,11 @@ async function loadProfiles() {
           '<option value="1"' + (p.pcleanup === '1' ? ' selected' : '') + '>' + esc(t('opt.cleanup.on')) + '</option>' +
           '<option value="0"' + (p.pcleanup === '0' ? ' selected' : '') + '>' + esc(t('opt.cleanup.off')) + '</option>' +
         '</select>' +
+        (isScript ? '' :
+        '<select class="cleanup" data-act="pScale" title="' + esc(t('scale.title')) + '">' +
+          '<option value="0"' + (p.pscale === '1' ? '' : ' selected') + '>' + esc(t('opt.scale.off')) + '</option>' +
+          '<option value="1"' + (p.pscale === '1' ? ' selected' : '') + '>' + esc(t('opt.scale.on')) + '</option>' +
+        '</select>') +
         '<button class="small primary" data-act="pRun">' + esc(isScript ? t('btn.runWater') : t('btn.runTask')) + '</button>' +
         (isScript ? '' : '<button class="small' + (isRec ? ' rec-on' : '') + '" data-act="pRec" data-state="' + (isRec ? 'recording' : 'idle') + '">' + esc(isRec ? t('btn.recStop') : t('btn.recStart')) + '</button>') +
         (p.slug === 'icbc' ? '' : '<button class="small danger" data-act="pDel">' + esc(t('btn.del')) + '</button>') +
@@ -262,7 +267,7 @@ async function onProfAct(e, evType) {
   const slug = prof.dataset.slug;
   const act = btn.dataset.act;
   // 只处理认识的动作; 像 pTime 这种纯输入框没有对应保存按钮, 直接忽略。
-  if (['pEnable', 'pCleanup', 'pTimeSave', 'pRun', 'pPkgSave', 'pDel', 'pRec'].indexOf(act) === -1) return;
+  if (['pEnable', 'pCleanup', 'pScale', 'pTimeSave', 'pRun', 'pPkgSave', 'pDel', 'pRec'].indexOf(act) === -1) return;
   if (busy && act !== 'pEnable') return;
   busy = true;
   try {
@@ -273,6 +278,11 @@ async function onProfAct(e, evType) {
       // 空值 = 跟随全局; 服务端会写成 P_CLEANUP= (空), 等同于未设置。
       const r = await run('profile set ' + slug + ' p_cleanup ' + (btn.value || ''));
       if (isErr(r)) { errToast(r); } else { toastMsg(t('toast.profCleanupSaved')); }
+      loadProfiles();
+    } else if (act === 'pScale') {
+      // 0 = 不缩放(默认); 1 = 回放时按录制时分辨率等比换算。
+      const r = await run('profile set ' + slug + ' p_scale ' + (btn.value === '1' ? '1' : '0'));
+      if (isErr(r)) { errToast(r); } else { toastMsg(t('toast.profScaleSaved')); }
       loadProfiles();
     } else if (act === 'pTimeSave') {
       const ti = prof.querySelector('[data-act=pTime]');
@@ -403,10 +413,153 @@ $('btnRestart').addEventListener('click', async () => {
 $('btnRefresh').addEventListener('click', () => { loadStatus(); loadLog(); });
 $('btnLog').addEventListener('click', loadLog);
 
+// ---------- 设备档案 (v0.11.0) ----------
+// 关键约定: 界面只把「检测结果预填给用户确认」, 绝不自动写配置。
+// DEV_APPLY 是总闸, 关着(=默认)时各脚本根本不读 DEV_*, 用的是 17 Pro 实测基线。
+let devDirty = false;
+let devLoaded = false;
+
+function devSet(id, v) { const e = $(id); if (e) e.value = (v == null ? '' : v); }
+
+// 从 device get 的 key=value 行里取值。DEV_LABEL 用 _ 表示空格, 这里还原。
+function devParse(out) {
+  const d = {};
+  for (const line of String(out || '').split('\n')) {
+    const m = line.match(/^(DEV_[A-Z_]+)=(.*)$/);
+    if (m) d[m[1]] = m[2].replace(/_/g, ' ');
+  }
+  return d;
+}
+
+async function loadDevice() {
+  const out = await run('device get');
+  if (out.indexOf('EXEC_ERR') === 0) { return; }
+  const d = devParse(out);
+  if (devDirty) return;              // 用户正在改, 不要被后台轮询覆盖
+  // 文件不存在时给 17 Pro 基线, 让界面永远有可读的值
+  devSet('devApply',   (d.DEV_APPLIED === '1' || d.DEV_APPLY === '1') ? true : false);
+  devSet('devModel',   d.DEV_MODEL  || '17pro');
+  devSet('devLabel',   d.DEV_LABEL  || 'Xiaomi 17 Pro');
+  devSet('devSW',      d.DEV_SW     || '1220');
+  devSet('devSH',      d.DEV_SH     || '2656');
+  devSet('devD',       (d.DEV_D     !== undefined && d.DEV_D !== '') ? d.DEV_D : '0');
+  devSet('devDPI',     d.DEV_DPI    || '');
+  devSet('devPX0',     d.DEV_PIN_X0 || '290');
+  devSet('devPY0',     d.DEV_PIN_Y0 || '1015');
+  devSet('devPDX',     d.DEV_PIN_DX || '320');
+  devSet('devPDY',     d.DEV_PIN_DY || '210');
+  devRenderBadge(d);
+  devLoaded = true;
+}
+
+// 徽标: 17 Pro 标「稳定」, 其余一律标「测试中」—— 不因为检测成功就改口。
+function devRenderBadge(d) {
+  const b = $('devBadge');
+  if (!b) return;
+  const applyOn = $('devApply') && $('devApply').checked;
+  const model = ($('devModel') && $('devModel').value) || '';
+  const isPro = (model === '17pro' || model === 'Xiaomi 17 Pro');
+  let txt, cls;
+  if (!applyOn) {
+    txt = (isPro ? 'Xiaomi 17 Pro · ' : (model + ' · ')) + t('dev.stable');
+    cls = 'pill ok';
+  } else if (isPro) {
+    // 17 Pro 开着覆盖: 数值通常与基线一致, 仍标稳定, 但要提示已偏离默认值
+    txt = 'Xiaomi 17 Pro · ' + t('dev.stable');
+    cls = 'pill ok';
+  } else {
+    txt = model + ' · ' + t('dev.testing');
+    cls = 'pill warn';
+  }
+  b.textContent = txt;
+  b.className = cls;
+}
+
+function devMarkDirty() {
+  devDirty = true;
+  devRenderBadge(null);
+}
+
+async function devDetect() {
+  if (busy) return;
+  busy = true;
+  const out = await run('device detect');
+  busy = false;
+  if (out.indexOf('EXEC_ERR') === 0 || out.indexOf('DEV_DETECT=ok') === -1) {
+    toastMsg(t('dev.detect.fail')); return;
+  }
+  const d = devParse(out);
+  if (d.DEV_MODEL) devSet('devModel', d.DEV_MODEL);
+  if (d.DEV_SW)    devSet('devSW', d.DEV_SW);
+  if (d.DEV_SH)    devSet('devSH', d.DEV_SH);
+  if (d.DEV_DPI)   devSet('devDPI', d.DEV_DPI);
+  // 显示 ID: 检测统一给 0, 只有当与当前值不同时才覆盖, 免得抹掉真机上的非 0 ID
+  if (d.DEV_D !== undefined && d.DEV_D !== '' && $('devD') && $('devD').value !== d.DEV_D) {
+    devSet('devD', d.DEV_D);
+  }
+  devDirty = true;
+  devRenderBadge(null);
+  toastMsg(t('dev.detect.ok'));
+}
+
+async function devSave() {
+  if (busy) return;
+  // 数值字段前端先自检一遍, 省得把非法值发到 root 侧
+  const bad = [];
+  const need = [['devSW','dev.sw',300],['devSH','dev.sh',300],['devD','dev.d',0],
+                ['devDPI','dev.dpi',0],['devPX0','dev.pin',1],['devPY0','dev.pin',1],
+                ['devPDX','dev.pin',1],['devPDY','dev.pin',1]];
+  for (const [id, key, min] of need) {
+    const v = ($(id) ? $(id).value : '').trim();
+    if (v === '') continue;                       // 留空 = 保留原值
+    if (!/^\d+$/.test(v)) { bad.push(t(key)); continue; }
+    if (parseInt(v, 10) < min) { bad.push(t(key)); }
+  }
+  if (bad.length) { toastMsg(t('dev.detect.fail')); return; }
+  const model = ($('devModel').value || '').trim();
+  const label = ($('devLabel').value || '').trim();
+  if (model && !/^[A-Za-z0-9_.-]+$/.test(model)) { toastMsg(t('dev.detect.fail')); return; }
+  if (label && !/^[A-Za-z0-9_.-]+$/.test(label)) { toastMsg(t('dev.detect.fail')); return; }
+
+  const applyOn = $('devApply').checked;
+  const isPro = (model === '17pro');
+  // 状态标签: 只有 17 Pro 允许标「稳定」, 其余一律「测试中」, 界面不提供改写入口。
+  const args = ['device set'];
+  args.push('DEV_APPLY=' + (applyOn ? '1' : '0'));
+  if (model) args.push('DEV_MODEL=' + model);
+  if (label) args.push('DEV_LABEL=' + label);
+  args.push('DEV_STATUS=' + (isPro ? 'stable' : 'testing'));
+  const nums = [['devSW','DEV_SW'],['devSH','DEV_SH'],['devD','DEV_D'],['devDPI','DEV_DPI'],
+                ['devPX0','DEV_PIN_X0'],['devPY0','DEV_PIN_Y0'],['devPDX','DEV_PIN_DX'],['devPDY','DEV_PIN_DY']];
+  for (const [id, key] of nums) {
+    const v = ($(id) ? $(id).value : '').trim();
+    if (v !== '') args.push(key + '=' + v);
+  }
+  busy = true;
+  const r = await run(args.join(' '));
+  busy = false;
+  if (isErr(r)) { errToast(r); return; }
+  devDirty = false;
+  toastMsg(t('dev.saved'));
+  loadDevice(); loadProfiles();
+}
+
+// 设备卡事件挂载
+(function () {
+  const card = $('devApply') ? $('devApply').closest('.card') : null;
+  if (!card) return;
+  card.addEventListener('input', devMarkDirty);
+  card.addEventListener('change', devMarkDirty);
+  const bDet = $('btnDevDetect'), bSave = $('btnDevSave');
+  if (bDet) bDet.addEventListener('click', devDetect);
+  if (bSave) bSave.addEventListener('click', devSave);
+})();
+
 // 初次加载: 先定语言(静态文案立即替换), 再拉状态
 buildLangSelect();
 applyI18n(document);
 loadFoot();
 loadStatus();
+loadDevice();
 loadLog();
 setInterval(() => { loadStatus(); }, 15000);

@@ -49,6 +49,24 @@ esac
 K=100
 SW=$(sed -n 's/^SW=\([0-9][0-9]*\).*/\1/p' $M/water.sh 2>/dev/null | head -1)
 case "$SW" in ''|*[!0-9]*) SW=1220;; esac
+# 屏幕高: 跨设备回放按宽高分别等比换算, 屏高与触摸轴无关, 直接从 water.sh 读。
+SH=$(sed -n 's/^SH=\([0-9][0-9]*\).*/\1/p' $M/water.sh 2>/dev/null | head -1)
+case "$SH" in ''|*[!0-9]*) SH=2656;; esac
+# 设备档案覆盖: DEV_APPLY=0(默认, 17 Pro)时本段不执行, SW 就是 water.sh 的实测值。
+# 覆盖值要求「唯一 + 纯数字 + 下限」, 不合格就保留原值。重复键视为歧义配置。
+DEVCONF=/data/adb/icbc_water/device.conf
+devpick() {
+  [ -f "$DEVCONF" ] || return 0
+  [ "$(grep -c "^$1=" "$DEVCONF" 2>/dev/null)" = "1" ] || return 0
+  sed -n "s/^$1=\([0-9][0-9]*\)$/\1/p" "$DEVCONF" 2>/dev/null | head -1
+}
+if [ "$(grep -c '^DEV_APPLY=' "$DEVCONF" 2>/dev/null)" = "1" ] \
+   && [ "$(sed -n 's/^DEV_APPLY=\(1\)$/1/p' "$DEVCONF" 2>/dev/null | head -1)" = "1" ]; then
+  DV_SW=$(devpick DEV_SW)
+  DV_SH=$(devpick DEV_SH)
+  if [ -n "$DV_SW" ] && [ "$DV_SW" -ge 300 ] 2>/dev/null; then SW=$DV_SW; fi
+  if [ -n "$DV_SH" ] && [ "$DV_SH" -ge 300 ] 2>/dev/null; then SH=$DV_SH; fi
+fi
 if [ -n "$TDEV" ] && [ -e "$TDEV" ]; then
   P=$(getevent -p $TDEV 2>/dev/null)
   # 只从 0035: 的轴明细行取 max，避免命中 ABS 摘要行。
@@ -110,6 +128,15 @@ stap() {  # 点按: tap x y
 sswp() {
   DUR=${1:-0}
   shift
+  # 跨设备缩放(默认恒等): 逐点换算后重建点列。点数不变, 所以下面的节奏摊薄
+  # (NPT / GAP) 与录制时保持一致, 只有坐标被按比例拉过。
+  SP=
+  while [ $# -ge 2 ]; do
+    SP="$SP $(scx "$1") $(scy "$2")"
+    shift 2
+  done
+  set -- $SP
+  [ $# -ge 2 ] || return 0
   P="$1 $2"
   shift 2
   while [ $# -ge 2 ]; do P="$P $1 $2"; shift 2; done
@@ -185,6 +212,38 @@ trap 'release_lock' 0
 trap 'release_lock; exit 143' 1 2 15
 
 echo $(date +%m%d-%H%M) REPLAY_START $N K=$K TDEV=$TDEV SW=$SW MX=${MX:-} >> $LOGF
+
+# 跨设备回放缩放 (v0.11.0, 默认关)
+# 录制时 record.sh 把几何写进了 actions.rx 首行的 #RX1 头。这里读回来, 若本 profile
+# 显式开启 P_SCALE=1, 就按「当前分辨率 / 录制时分辨率」把每个动作坐标等比换算。
+# 关闭(默认)或头缺失/损坏时 SCALE_ON=0, 坐标一个字节都不动 —— 同机录制回放行为不变。
+# 宽高分别换算: 异形屏与不同密度下宽高比未必一致, 强行共用一个系数会纵向偏。
+#
+# 换算在「先乘后除 + 四舍五入」这一步完成, 不预先把比例截断成整数系数:
+# 先算系数会在 SW/RX_SW 非整除时丢掉小数, 长边上能差出 1 像素。
+SCALE_ON=0
+RX_SW=; RX_SH=
+sc_read() {  # sc_read KEY -> 从首行 #RX1 头里取纯数字值
+  head -n 1 "$RX" 2>/dev/null | sed -n "s/.*[[:space:]]$1=\\([0-9][0-9]*\\).*/\\1/p"
+}
+RX_SW=$(sc_read SW); RX_SH=$(sc_read SH)
+if [ -n "$RX_SW" ] && [ -n "$RX_SH" ] \
+   && [ "$RX_SW" -ge 300 ] 2>/dev/null && [ "$RX_SH" -ge 300 ] 2>/dev/null; then
+  RX_SCALE=0
+  [ -f "$PFX/$N/conf" ] && RX_SCALE=$(sed -n 's/^P_SCALE=\(1\)$/1/p' "$PFX/$N/conf" 2>/dev/null | head -1)
+  # 比例落在 0.2x..3.0x 之外视为异常(分辨率填错/换机太远), 宁可按原坐标回放。
+  if [ "$RX_SCALE" = "1" ] \
+     && [ $(( SW * 100 / RX_SW )) -ge 20 ] 2>/dev/null && [ $(( SW * 100 / RX_SW )) -le 300 ] 2>/dev/null \
+     && [ $(( SH * 100 / RX_SH )) -ge 20 ] 2>/dev/null && [ $(( SH * 100 / RX_SH )) -le 300 ] 2>/dev/null; then
+    SCALE_ON=1
+    echo $(date +%m%d-%H%M) REPLAY_SCALE on rec=${RX_SW}x${RX_SH} cur=${SW}x${SH} >> $LOGF
+  fi
+fi
+
+# 坐标换算: (值 * 当前 / 录制 + 录制/2) / 1, 整数除法自带向下取整, 加半个除数即四舍五入
+scx() { if [ "$SCALE_ON" = "1" ]; then echo $(( ($1 * SW + RX_SW / 2) / RX_SW )); else echo $1; fi; }
+scy() { if [ "$SCALE_ON" = "1" ]; then echo $(( ($1 * SH + RX_SH / 2) / RX_SH )); else echo $1; fi; }
+
 # 禁止动作坐标中的通配符展开；设备发现已经完成。
 set -f
 PREV=0
@@ -227,6 +286,8 @@ while IFS= read -r line; do
     tap\ *)
       set -- $REST
       RX0=$2; RY0=$3
+      # 跨设备缩放(默认 SCALE_X=SCALE_Y=1000, 即恒等, 不改变任何坐标)
+      RX0=$(scx "$RX0"); RY0=$(scy "$RY0")
       stap $RX0 $RY0
       STEP=$((STEP+1))
       ;;

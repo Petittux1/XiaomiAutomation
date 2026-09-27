@@ -154,7 +154,7 @@ restart_svc() {
 prof_line() {
   CD=$1
   PN=$(basename "$CD")
-  P_NAME=; P_TYPE=; P_PKG=; P_SCHED=; P_ENABLE=; P_CLEANUP=
+  P_NAME=; P_TYPE=; P_PKG=; P_SCHED=; P_ENABLE=; P_CLEANUP=; P_SCALE=
   [ -f $CD/conf ] && . $CD/conf 2>/dev/null
   T0=$(date +%Y%m%d)
   PD=no
@@ -164,7 +164,7 @@ prof_line() {
   PACTS=0
   # sw@DUR 是新格式; 同时兼容旧 sw 空格格式
   [ -f $CD/actions.rx ] && PACTS=$(grep -cE '^W[0-9]+ (tap|sw@[0-9]+|sw)($| )' $CD/actions.rx 2>/dev/null)
-  echo "profile=$PN pname=${P_NAME:-$PN} ptype=${P_TYPE:-script} ppkg=${P_PKG:-} psched=${P_SCHED:-} penable=${P_ENABLE:-} pcleanup=${P_CLEANUP:-} pdone=$PD ptry=$PTRY pacts=${PACTS:-0}"
+  echo "profile=$PN pname=${P_NAME:-$PN} ptype=${P_TYPE:-script} ppkg=${P_PKG:-} psched=${P_SCHED:-} penable=${P_ENABLE:-} pcleanup=${P_CLEANUP:-} pscale=${P_SCALE:-0} pdone=$PD ptry=$PTRY pacts=${PACTS:-0}"
 }
 
 list_profiles() {
@@ -173,6 +173,108 @@ list_profiles() {
     [ -d "$CD" ] || continue
     prof_line "$CD"
   done
+}
+
+# ---------- 设备档案 (v0.11.0) ----------
+# device.conf 里 DEV_APPLY 是总闸: 0 = 保持 17 Pro 的实测基线(默认), 1 = 用 DEV_* 覆盖。
+# 这里只做读写与检测; 真正「应用」由 water.sh / service.sh / record.sh / replay.sh 各自在
+# 运行时读取并做纯数字+唯一性校验, 校验不过就保留原值。
+DEV_DIR=/data/adb/icbc_water
+DEV_FILE=$DEV_DIR/device.conf
+
+# 读单个键(只认纯 ASCII 标签; 重复键视为歧义, 返回空)
+dev_read() {
+  [ -f "$DEV_FILE" ] || return 0
+  [ "$(grep -c "^$1=" "$DEV_FILE" 2>/dev/null)" = "1" ] || return 0
+  sed -n "s/^$1=\(.*\)$/\1/p" "$DEV_FILE" 2>/dev/null | head -1
+}
+
+dev_get() {
+  echo "=== 设备档案 ==="
+  DEV_ON=0
+  if [ -f "$DEV_FILE" ]; then
+    for DK in DEV_APPLY DEV_MODEL DEV_LABEL DEV_STATUS DEV_SW DEV_SH DEV_D DEV_DPI \
+              DEV_PIN_X0 DEV_PIN_Y0 DEV_PIN_DX DEV_PIN_DY; do
+      DV=$(dev_read "$DK")
+      [ -n "$DV" ] && echo "$DK=$DV"
+    done
+    [ "$(dev_read DEV_APPLY)" = "1" ] && DEV_ON=1
+  else
+    echo "(no device.conf)"
+  fi
+  echo "DEV_APPLIED=$DEV_ON"
+}
+
+# 写入: 白名单 + 逐项校验。数值键只收纯数字, 标签键去空白/引号/反斜杠。
+# DEV_APPLY=0 时把数值一并清掉, 避免留着上一台机器的数据误导人。
+dev_set() {
+  mkdir -p "$DEV_DIR" 2>/dev/null
+  # 先按参数逐项校验, 全部通过才落盘, 避免半途中断留下半个配置
+  DS_PEND=
+  DS_APPLY=
+  for KV in "$@"; do
+    case "$KV" in
+      *=*) DK=${KV%%=*}; DV=${KV#*=}
+          DV=$(printf '%s' "$DV" | tr -d '\r\n') ;;
+      *) continue ;;
+    esac
+    case "$DK" in
+      DEV_APPLY)
+        case "$DV" in 0|1) DS_APPLY=$DV; DS_PEND="$DS_PEND $DK=$DV";; *) echo "ERR apply 0/1"; exit 1;; esac ;;
+      DEV_SW|DEV_SH|DEV_D|DEV_DPI|DEV_PIN_X0|DEV_PIN_Y0|DEV_PIN_DX|DEV_PIN_DY)
+        # 纯数字, 且不超长(防溢出); DEV_D 允许 0
+        case "$DV" in
+          ''|*[!0-9]*) echo "ERR $DK 必须是纯数字"; exit 1;;
+        esac
+        [ ${#DV} -gt 18 ] && { echo "ERR $DK 数值过长"; exit 1; }
+        DS_PEND="$DS_PEND $DK=$DV" ;;
+      DEV_MODEL|DEV_LABEL|DEV_STATUS)
+        # 纯 ASCII 短标签, 不允许空白与引号/反斜杠
+        case "$DV" in
+          ''|*[!A-Za-z0-9_.-]*) echo "ERR $DK 只允许字母数字 _ . -"; exit 1;;
+        esac
+        [ ${#DV} -gt 40 ] && { echo "ERR $DK 过长"; exit 1; }
+        DS_PEND="$DS_PEND $DK=$DV" ;;
+      *) echo "ERR unknown key $DK"; exit 1;;
+    esac
+  done
+  [ -n "$DS_PEND" ] || { echo "ERR nothing to set"; exit 1; }
+  for KV in $DS_PEND; do
+    atomic_update "$DEV_FILE" "${KV%%=*}" "${KV#*=}" || { echo "ERR write device.conf"; exit 1; }
+  done
+  # 总闸关掉时, 顺手把数值键清空: 界面上就不会残留上一台机器的分辨率。
+  if [ "$DS_APPLY" = "0" ]; then
+    atomic_update "$DEV_FILE" DEV_MODEL 17pro
+    atomic_update "$DEV_FILE" DEV_LABEL Xiaomi_17_Pro
+    atomic_update "$DEV_FILE" DEV_STATUS stable
+  fi
+  dev_get
+}
+
+# 自动检测: 只读 wm size / wm density / dumpsys display, 不写任何文件。
+# 检测结果只回显, 由界面预填给用户确认后再保存 —— 不做「检测到就直接生效」。
+dev_detect() {
+  echo "=== 自动检测 ==="
+  echo "DEV_DETECT=ok"
+  DSZ=$(wm size 2>/dev/null | grep -m1 'Override size')
+  [ -z "$DSZ" ] && DSZ=$(wm size 2>/dev/null | grep -m1 'Physical size')
+  if [ -n "$DSZ" ]; then
+    DSW=$(printf '%s' "$DSZ" | sed -n 's/.*[^0-9]\([0-9][0-9]*\)x\([0-9][0-9]*\).*/\1/p')
+    DSH=$(printf '%s' "$DSZ" | sed -n 's/.*[^0-9]\([0-9][0-9]*\)x\([0-9][0-9]*\).*/\2/p')
+    [ -n "$DSW" ] && echo "DEV_SW=$DSW"
+    [ -n "$DSH" ] && echo "DEV_SH=$DSH"
+  fi
+  DD=$(wm density 2>/dev/null | grep -m1 'Override density')
+  [ -z "$DD" ] && DD=$(wm density 2>/dev/null | grep -m1 'Physical density')
+  DDP=$(printf '%s' "$DD" | sed -n 's/.*[^0-9]\([0-9][0-9]*\).*/\1/p')
+  [ -n "$DDP" ] && echo "DEV_DPI=$DDP"
+  # 显示 ID: 多数机型的 screencap -d 用 0; 探测不到就报 0, 由用户核对。
+  echo "DEV_D=0"
+  # 锁屏键盘宫格无法自动可靠识别, 明确告知需要手动填。
+  echo "DEV_PIN_HINT=manual"
+  # 机型名尝试从 ro.product.model 取
+  DMODEL=$(getprop ro.product.model 2>/dev/null | tr -d '\r\n' | sed 's/[^A-Za-z0-9_.-]/_/g')
+  [ -n "$DMODEL" ] && echo "DEV_MODEL=$DMODEL"
 }
 
 case "$1" in
@@ -310,7 +412,7 @@ case "$1" in
         echo "PROFILE_DEL $SLUG"
         ;;
       set)
-        # profile set SLUG KEY VALUE  KEY: p_name|p_pkg|p_sched|p_enable|p_cleanup  (写 conf 大写 P_ 字段)
+        # profile set SLUG KEY VALUE  KEY: p_name|p_pkg|p_sched|p_enable|p_cleanup|p_scale  (写 conf 大写 P_ 字段)
         SLUG=$3; KEY=$4; VAL=$5
         slugok "$SLUG" || { echo "ERR slug"; exit 1; }
         [ -f $PFX/$SLUG/conf ] || { echo "ERR no profile $SLUG"; exit 1; }
@@ -340,7 +442,14 @@ case "$1" in
               *) echo "ERR cleanup 0/1"; exit 1;;
             esac
             ;;
-          *) echo "ERR key p_name|p_pkg|p_sched|p_enable|p_cleanup"; exit 1;;
+          p_scale) KEY=P_SCALE
+            # 0 = 不缩放(默认, 同机录制回放); 1 = 按录制时分辨率等比换算后再回放
+            case "$VAL" in
+              1|0) ;;
+              *) echo "ERR scale 0/1"; exit 1;;
+            esac
+            ;;
+          *) echo "ERR key p_name|p_pkg|p_sched|p_enable|p_cleanup|p_scale"; exit 1;;
         esac
         if ! atomic_update "$PFX/$SLUG/conf" "$KEY" "$VAL"; then
           echo "ERR write profile"
@@ -390,11 +499,18 @@ case "$1" in
   restart)
     restart_svc
     ;;
+  device)
+    case "$2" in
+      get)    dev_get;;
+      set)    shift 2; dev_set "$@";;
+      detect) dev_detect;;
+      *)      echo "ERR device get|set|detect"; exit 1;;
+    esac;;
   log)
     tail -60 $LOG 2>/dev/null || echo "(no log yet)"
     ;;
   *)
-    echo "usage: webctl.sh status|setpin|settime|setenable|setmode|setopen|setsleep|setwatch|setcleanup|trigger[NAME]|restart|log|profiles|profile add/del/set|record start/stop/status"
+    echo "usage: webctl.sh status|setpin|settime|setenable|setmode|setopen|setsleep|setwatch|setcleanup|trigger[NAME]|restart|log|profiles|profile add/del/set|record start/stop/status|device get|set|detect"
     ;;
 esac
 exit 0

@@ -12,6 +12,32 @@ SNAP=1                       # 1=留取证截图(便于排查) 0=跳过(更省�
 CHOWN=10278:1023             # 取证文件属主 (留空=不 chown)
 # ============================================================
 
+# ---- 设备档案覆盖 (v0.11.0 新增, opt-in) ----
+# device.conf 的 DEV_APPLY=0 时(默认值, 也是 Xiaomi 17 Pro 走的路径), 本段完全不执行,
+# 上面 D/SW/SH 三个值就是最终值, 与 v0.10.0 逐字节一致。
+# 只有显式设成 1 才用 DEV_* 覆盖, 且每个值都先做「唯一 + 纯数字 + 合理下限」校验:
+# 不合格就保留原值。这样即使 device.conf 损坏或被截断, 后果也只是覆盖不生效, 不会把流程带歪。
+# 重复键视为歧义配置: 取 head -1 会让「后面追加一行」悄悄改掉生效值, 不接受这种写法。
+DEVCONF=/data/adb/icbc_water/device.conf
+devpick() {  # devpick KEY -> 纯数字值; 缺失/重复/非纯数字一律返回空, 由调用方保留原值
+  [ -f "$DEVCONF" ] || return 0
+  [ "$(grep -c "^$1=" "$DEVCONF" 2>/dev/null)" = "1" ] || return 0
+  sed -n "s/^$1=\([0-9][0-9]*\)$/\1/p" "$DEVCONF" 2>/dev/null | head -1
+}
+# 总闸同样要求「DEV_APPLY 只出现一次且值为 1」, 否则整体不覆盖。
+if [ "$(grep -c '^DEV_APPLY=' "$DEVCONF" 2>/dev/null)" = "1" ] \
+   && [ "$(sed -n 's/^DEV_APPLY=\(1\)$/1/p' "$DEVCONF" 2>/dev/null | head -1)" = "1" ]; then
+  DV_SW=$(devpick DEV_SW)
+  DV_SH=$(devpick DEV_SH)
+  DV_D=$(devpick DEV_D)
+  # 屏宽/屏高给个下限: 0 或个位数会让像素偏移算到负数, 直接判为非法。
+  # 显示 ID 允许 0(多数手机就是 0), 所以只查非空。
+  if [ -n "$DV_SW" ] && [ "$DV_SW" -ge 300 ] 2>/dev/null; then SW=$DV_SW; fi
+  if [ -n "$DV_SH" ] && [ "$DV_SH" -ge 300 ] 2>/dev/null; then SH=$DV_SH; fi
+  if [ -n "$DV_D" ]; then D=$DV_D; fi
+  echo DEV_PROFILE APPLY=1 SW=$SW SH=$SH D=$D
+fi
+
 RAW=$WORK/zxr.raw
 M=/data/adb/modules/icbc_daily_water
 

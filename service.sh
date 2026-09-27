@@ -29,6 +29,28 @@ PIN_Y0=${PIN_Y0:-1015}
 PIN_DX=${PIN_DX:-320}
 PIN_DY=${PIN_DY:-210}
 
+# 锁屏 PIN 宫格坐标: 设备档案覆盖 (opt-in)
+# 17 Pro 走 DEV_APPLY=0, 本段不执行, 上面四个值就是 sched.conf 里的实测值。
+# 换机器时锁屏键盘的 4 列宫格位置和 17 Pro 不同, 必须一起覆盖, 否则 PIN 盲打会打错格。
+# 要求「唯一 + 纯数字 + 下限」, 不合格就保留原值; 重复键视为歧义配置。
+PINCONF=/data/adb/icbc_water/device.conf
+pinpick() {
+  [ -f "$PINCONF" ] || return 0
+  [ "$(grep -c "^$1=" "$PINCONF" 2>/dev/null)" = "1" ] || return 0
+  sed -n "s/^$1=\([0-9][0-9]*\)$/\1/p" "$PINCONF" 2>/dev/null | head -1
+}
+if [ "$(grep -c '^DEV_APPLY=' "$PINCONF" 2>/dev/null)" = "1" ] \
+   && [ "$(sed -n 's/^DEV_APPLY=\(1\)$/1/p' "$PINCONF" 2>/dev/null | head -1)" = "1" ]; then
+  PV_X0=$(pinpick DEV_PIN_X0)
+  PV_Y0=$(pinpick DEV_PIN_Y0)
+  PV_DX=$(pinpick DEV_PIN_DX)
+  PV_DY=$(pinpick DEV_PIN_DY)
+  if [ -n "$PV_X0" ] && [ "$PV_X0" -ge 1 ] 2>/dev/null; then PIN_X0=$PV_X0; fi
+  if [ -n "$PV_Y0" ] && [ "$PV_Y0" -ge 1 ] 2>/dev/null; then PIN_Y0=$PV_Y0; fi
+  if [ -n "$PV_DX" ] && [ "$PV_DX" -ge 1 ] 2>/dev/null; then PIN_DX=$PV_DX; fi
+  if [ -n "$PV_DY" ] && [ "$PV_DY" -ge 1 ] 2>/dev/null; then PIN_DY=$PV_DY; fi
+fi
+
 # 日志裁剪: 超过 200KB 保留末尾 100 行
 if [ -f $LOG ]; then
   SZ=$(wc -c < $LOG 2>/dev/null)
@@ -103,6 +125,19 @@ echo DEVT TDEV=$TDEV BDEV=$BDEV PDEV=$PDEV >> $LOG
 K=100
 SW=$(sed -n 's/^SW=\([0-9][0-9]*\).*/\1/p' $M/water.sh 2>/dev/null | head -1)
 case "$SW" in ''|*[!0-9]*) SW=1220;; esac
+# 设备档案覆盖: DEV_APPLY=0(默认, 17 Pro)时本段不执行, SW 就是 water.sh 的实测值。
+# 覆盖值要求「唯一 + 纯数字 + 下限」, 不合格就保留原值; 重复键视为歧义配置。
+DEVCONF=/data/adb/icbc_water/device.conf
+devpick() {
+  [ -f "$DEVCONF" ] || return 0
+  [ "$(grep -c "^$1=" "$DEVCONF" 2>/dev/null)" = "1" ] || return 0
+  sed -n "s/^$1=\([0-9][0-9]*\)$/\1/p" "$DEVCONF" 2>/dev/null | head -1
+}
+if [ "$(grep -c '^DEV_APPLY=' "$DEVCONF" 2>/dev/null)" = "1" ] \
+   && [ "$(sed -n 's/^DEV_APPLY=\(1\)$/1/p' "$DEVCONF" 2>/dev/null | head -1)" = "1" ]; then
+  DV_SW=$(devpick DEV_SW)
+  if [ -n "$DV_SW" ] && [ "$DV_SW" -ge 300 ] 2>/dev/null; then SW=$DV_SW; fi
+fi
 if [ -n "$TDEV" ] && [ -e "$TDEV" ]; then
   P=$(getevent -p $TDEV 2>/dev/null)
   # 只从 0035: 的轴明细行取 max，避免命中 ABS 摘要行。
