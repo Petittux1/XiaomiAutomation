@@ -183,6 +183,13 @@ for src in $DOCS; do
   grep -qF 'kernelsu.js' "$STAGE/$src" || {
     echo "构建失败: $src 的运行环境说明里没提 kernelsu.js 依赖" >&2; exit 1; }
 done
+# Magisk-Modules-Alt-Repo 等第三方模块仓库要求「README.md 是英文的」。我们的
+# README.md 以中文为主(用户明确要求), 所以顶部保留一段英文概览来满足这条,
+# 中文正文依然是主文档。别把这段删掉, 否则投第三方仓库会被直接退回。
+grep -qF '**English summary**' "$STAGE/README.md" || {
+  echo "构建失败: README.md 缺少顶部英文概览(第三方模块仓库要求 README.md 含英文)" >&2; exit 1; }
+grep -qF '**License:** MIT' "$STAGE/README.md" || {
+  echo "构建失败: README.md 英文概览里没写 License(第三方仓库要求明确可再分发)" >&2; exit 1; }
 
 echo "已生成: $OUT"
 echo "WebUI 缓存标记: $CACHE_TAG (BUILD_VC=$VC)"
