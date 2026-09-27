@@ -18,6 +18,7 @@ rm -f "$OUT"
 mkdir -p "$STAGE/tools" "$STAGE/webroot"
 cp "$ROOT"/module.prop "$ROOT"/service.sh "$ROOT"/water.sh "$ROOT"/record.sh "$ROOT"/replay.sh \
    "$ROOT"/webctl.sh "$ROOT"/sched.conf "$ROOT"/device.conf "$ROOT"/customize.sh \
+   "$ROOT"/config.json \
    "$ROOT"/README.md "$ROOT"/README.en.md "$ROOT"/README.fr.md "$ROOT"/README.ru.md \
    "$ROOT"/LICENSE "$ROOT"/.gitignore "$STAGE/"
 cp "$ROOT"/webroot/* "$STAGE/webroot/"
@@ -100,7 +101,7 @@ chmod 644 "$STAGE"/module.prop "$STAGE"/sched.conf "$STAGE"/device.conf \
 # ---------- 产物自检 ----------
 # 少一个文件, 装上去就要么白屏、要么设备档案初始化不出来, 所以在这里拦住。
 for f in module.prop service.sh water.sh record.sh replay.sh webctl.sh \
-         sched.conf device.conf customize.sh \
+         sched.conf device.conf customize.sh config.json \
          README.md README.en.md README.fr.md README.ru.md \
          webroot/index.html webroot/app.js webroot/i18n.js webroot/kernelsu.js; do
   unzip -l "$OUT" | grep -qF " $f" || { echo "构建失败: 产物缺少 $f" >&2; exit 1; }
@@ -140,6 +141,76 @@ for f in README.en.md README.fr.md README.ru.md; do
     echo "构建失败: $f 的一级标题应是 '# $BRAND_EN'" >&2; exit 1; }
 done
 
+# ---------- config.json: MMRL 专用 ----------
+# MMRL 的模块配置读 /data/adb/modules/<id>/config.json。其中 webui-engine 决定用
+# 哪个引擎渲染 webroot/:
+#   "ksu" -> 传统 KsuWebUIActivity, 注入 window.ksu(我们的 kernelsu.js 认这个)
+#   "wx"  -> WebUI X, 全局名和 API 都不同, 我们的 shim 直接不工作
+# 省略该字段时 MMRL 默认走 "wx", 所以必须显式写 "ksu"。
+# 同一个文件里的 name / description 会被 MMRL 用来显示模块卡片, 于是这里也承担
+# 「各仓库模块名统一」的职责 —— 四种语言都填同一个品牌串, 不做本地化翻译。
+CFG="$STAGE/config.json"
+python3 - "$CFG" "$BRAND_CN" << 'PY' || exit 1
+import json, sys
+path, brand = sys.argv[1], sys.argv[2]
+try:
+    with open(path, encoding='utf-8') as f:
+        c = json.load(f)
+except Exception as e:
+    sys.exit('构建失败: config.json 不是合法 JSON (%s)' % e)
+bad = []
+if c.get('webui-engine') != 'ksu':
+    bad.append('webui-engine 应为 "ksu", 实际 %r —— MMRL 会退回 WebUI X, 而它的 API 与本模块不兼容'
+               % c.get('webui-engine'))
+for loc in ('zh', 'en', 'fr', 'ru'):
+    if (c.get('name') or {}).get(loc) != brand:
+        bad.append('name.%s 应为 %r, 实际 %r' % (loc, brand, (c.get('name') or {}).get(loc)))
+    d = (c.get('description') or {}).get(loc)
+    if not isinstance(d, str) or not d.strip():
+        bad.append('description.%s 缺失或为空' % loc)
+if bad:
+    for b in bad:
+        sys.stderr.write('构建失败: config.json ' + b + '\n')
+    sys.exit(1)
+PY
+
+# ---------- 缺桥提示 ----------
+# WebUI 的执行通道是管理器注入的全局 ksu 对象。KernelSU(v0.8.0 起)、APatch
+# (10568 起) 以及它们的分支注入的都是这个同名对象, 所以同一份 webroot/ 通用。
+# 万一被拿到没有该对象的宿主里打开(普通浏览器、MMRL 的 WebUI X 引擎), 不要
+# 满屏 ERR, 直接给一条说人话的整页提示。
+grep -qF 'id="nobridge" hidden' "$STAGE/webroot/index.html" || {
+  echo "构建失败: index.html 的缺桥提示必须默认 hidden(否则在正常管理器里也会显示)" >&2; exit 1; }
+for k in app.nobridge app.nobridge.hint app.nobridge.fix; do
+  n=$(grep -cF "'$k':" "$STAGE/webroot/i18n.js" || true)
+  [ "$n" = "4" ] || {
+    echo "构建失败: i18n.js 里 '$k' 应有 4 条(四种语言各一条), 实际 $n 条" >&2; exit 1; }
+done
+grep -qF 'function bridgeOk()' "$STAGE/webroot/app.js" || {
+  echo "构建失败: app.js 缺 bridgeOk() 探测" >&2; exit 1; }
+# 光有探测不够, 必须真的挡住启动: 否则缺桥时仍会每 15 秒轮询一次、全失败、刷屏。
+grep -qF 'if (!bridgeOk()) {' "$STAGE/webroot/app.js" || {
+  echo "构建失败: app.js 的启动流程没有用 bridgeOk() 挡住轮询" >&2; exit 1; }
+# bridgeOk() 必须在模块顶层调用之前定义好。const/function 提升规则在这里不重要 ——
+# function 声明会提升, 但把探测写成箭头函数常量就会 TDZ 抛错、整个 app.js 挂掉。
+grep -qE "^function bridgeOk\(\)" "$STAGE/webroot/app.js" || {
+  echo "构建失败: bridgeOk() 必须写成函数声明(箭头函数常量会在顶层调用处 TDZ 抛错)" >&2; exit 1; }
+
+# ---------- 别再写回那句错的兼容性说明 ----------
+# v0.12.2 ~ v0.12.4 的文案说「WebUI 需 KernelSU / requires KernelSU」, 并把
+# APatch 和 Magisk 归为不支持。查 APatch 源码后确认这是错的: 它注入的也是
+# window.ksu、也用 webroot/、同一个源。旧文案一旦被改回来就是又发一次错信息。
+if grep -rqF 'WebUI 需 KernelSU' "$STAGE" 2>/dev/null \
+|| grep -rqF 'WebUI requires KernelSU' "$STAGE" 2>/dev/null; then
+  echo "构建失败: 仍有「WebUI 需/requires KernelSU」的旧文案 —— APatch 同样支持 WebUI" >&2; exit 1
+fi
+# 正确的新文案必须四处都在(中文/英文 module.prop 描述 + 四份 README 的对照表),
+# 少一处就会在某一种语言里继续误导用户。
+for f in module.prop README.md README.en.md README.fr.md README.ru.md; do
+  grep -qF 'APatch' "$STAGE/$f" || {
+    echo "构建失败: $f 没提 APatch 的 WebUI 支持情况" >&2; exit 1; }
+done
+
 # description 是单行属性(readProperty 按第一个 = 切开、且不处理转义), 写多行
 # 会被后面的行当成新键丢掉。这里把「中文优先、再英文」钉成断言。
 # 注意别用 grep '[一-鿿]' 这类字符类: Termux 下 LANG 常常是空的, 它会退化成
@@ -164,6 +235,17 @@ en_ok=0; for m in automation scheduler record replay WebUI; do
   case "$EN_PART" in *"$m"*) en_ok=1 ;; esac
 done
 [ "$en_ok" = 1 ] || { echo "构建失败: description 的英文段里找不到英文标识串" >&2; exit 1; }
+# Magisk 的正确说法要出现在描述里, 而且查完整短语而不是只查 'KsuWebUI' 三个字母 ——
+# 否则 'KsuWebUI2'、'不用 KsuWebUI' 这类改法照样能过(反例测试里真的踩到过)。
+# 用 case 而不是 grep: $ZH_PART 是字符串不是文件名, `grep -qF 'x' "$ZH_PART"`
+# 会把整段描述当成文件名去找, 报 "No such file or directory" —— 上面那些标识串
+# 检查一开始就是用 case 的, 这里也得跟着用一样的写法。
+case "$ZH_PART" in *"KsuWebUI 或 MMRL"*) : ;;
+  *) echo "构建失败: description 中文段应写明 Magisk 用户需要「KsuWebUI 或 MMRL」" >&2; exit 1 ;;
+esac
+case "$EN_PART" in *"KsuWebUI or MMRL"*) : ;;
+  *) echo "构建失败: description 英文段应写明 Magisk users need \"KsuWebUI or MMRL\"" >&2; exit 1 ;;
+esac
 # 模块列表里 description 会被折行/截断, 太长等于没写。LANG 为空时 wc -m == wc -c,
 # 所以这里就用字节数, 阈值按「中英两段都留得住」定。
 dlen=$(printf '%s' "$DESC" | wc -c)

@@ -1,0 +1,15 @@
+{
+  "name": {
+    "zh": "澎湃自动化—XiaomiAutomation",
+    "en": "澎湃自动化—XiaomiAutomation",
+    "fr": "澎湃自动化—XiaomiAutomation",
+    "ru": "澎湃自动化—XiaomiAutomation"
+  },
+  "description": {
+    "zh": "面向 Xiaomi 17 Pro / HyperOS 4 的 root 自动化模块：多任务定时调度、任意 App 录制回放、内置工行每日浇水。纯 root 直控，无 Hook 无无障碍。WebUI 支持 KernelSU / APatch；Magisk 请配 KsuWebUI 或 MMRL。",
+    "en": "Root automation for Xiaomi 17 Pro / HyperOS 4: multi-profile scheduler, record/replay for any app, built-in ICBC daily watering. Pure root control, no hooks, no accessibility service. WebUI runs on KernelSU / APatch; on Magisk use KsuWebUI or MMRL.",
+    "fr": "Automatisation root pour Xiaomi 17 Pro / HyperOS 4 : planification multi-profils, enregistrement/relecture de n'importe quelle application, arrosage quotidien ICBC intégré. Contrôle root pur, sans hook ni service d'accessibilité. Le WebUI fonctionne sur KernelSU / APatch ; sur Magisk, utilisez KsuWebUI ou MMRL.",
+    "ru": "Root-автоматизация для Xiaomi 17 Pro / HyperOS 4: планировщик с несколькими профилями, запись и воспроизведение действий в любом приложении, встроенное ежедневное «поливо» в ICBC. Чистый root-контроль, без хуков и службы доступности. WebUI работает на KernelSU / APatch; на Magisk используйте KsuWebUI или MMRL."
+  },
+  "webui-engine": "ksu"
+}

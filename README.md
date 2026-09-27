@@ -6,10 +6,12 @@
 >
 > **澎湃自动化 (XiaomiAutomation)** is a **device-specific** root automation module for **Xiaomi 17 Pro / HyperOS 4**, installable on **KernelSU, Magisk and APatch**. It provides multi-profile scheduling, record/replay of arbitrary app interactions, and a built-in ICBC daily watering task (07:30 by default). Automation is done by **pure root control** (`screencap` / `getevent` / `sendevent`) — no accessibility service, no Xposed, no hooks, no `input` injection.
 >
-> | Feature | KernelSU | Magisk / APatch |
-> | --- | :---: | :---: |
-> | Scheduling / record / replay / PIN auto-unlock | ✅ | ✅ |
-> | Module WebUI (Chinese / English / Français / Русский) | ✅ | ❌ — the WebUI needs the `kernelsu.js` bridge injected by KernelSU; use `webctl.sh` from a root shell instead |
+> | Feature | KernelSU / forks | APatch | Magisk |
+> | --- | :---: | :---: | :---: |
+> | Scheduling / record / replay / PIN auto-unlock | ✅ | ✅ | ✅ |
+> | Module WebUI (Chinese / English / Français / Русский) | ✅ | ✅ | ✅ with KsuWebUI or MMRL installed |
+>
+> The WebUI runs on APatch too, not just KernelSU — both inject the same `ksu` global into `webroot/`. Stock Magisk has no WebView code at all, so it needs a host app (KsuWebUI or MMRL) to provide one; this module then works unchanged. See [Requirements](#运行环境) below.
 >
 > Other HyperOS 4 phones can be calibrated with the built-in device-profile layer (screen size, display ID, lock-keypad geometry), but the ICBC flow is only tested on the Xiaomi 17 Pro.
 >
@@ -46,17 +48,20 @@
 
 模块只用到标准的 `customize.sh` + `service.sh` 入口：**不含 Zygisk、不改 `/system`、不需要 metamodule**。所以在 Magisk / APatch 下定时调度、录制回放、PIN 自动解锁都能正常跑。
 
-但 **WebUI 依赖 KernelSU 注入的 `kernelsu.js` 桥**，Magisk / APatch 不提供这个桥：
+WebUI 也**不只支持 KernelSU**。APatch 从 10568 版起就有模块 WebUI，做法与 KernelSU 一致：把 `webroot/` 挂在 `https://mui.kernelsu.org` 上，并注入一个**同名**的全局对象 `ksu`——本模块的 `kernelsu.js` 用的正是它，所以在 APatch 上开箱即用，一行代码都不用改。KernelSU Next、SukiSU Ultra 等分支同理。
 
-| 功能 | KernelSU | Magisk / APatch |
-| --- | :---: | :---: |
-| 定时调度 / 录制 / 回放 / PIN 自动解锁 | ✅ | ✅ |
-| 模块 WebUI | ✅ | ❌（用下面的 `webctl.sh`） |
+Magisk 是唯一的例外：上游 Magisk 里**一行 WebView 代码都没有**（不是「没实现」，是压根没这个能力），所以它自己不会渲染 `webroot/`。要在那上面用 WebUI，需要一个自带 WebUI 的宿主 App：
 
-在 Magisk / APatch 下想改配置，用 root shell 直接调 `webctl.sh`（与 WebUI 完全同一套后端）：
+| 功能 | KernelSU / 分支 | APatch | Magisk |
+| --- | :---: | :---: | :---: |
+| 定时调度 / 录制 / 回放 / PIN 自动解锁 | ✅ | ✅ | ✅ |
+| 模块 WebUI | ✅ | ✅ | 装 KsuWebUI 或 MMRL 后 ✅ |
 
-```sh
-su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh status'
+**KsuWebUI** 和 **MMRL** 做的事就是在 Magisk 上自己申请 root，再把**同一个** `ksu` 全局注入给 `webroot/`。装了它们之后本模块无需任何改动，WebUI 原样可用——这正是整个生态在 Magisk 上的通行做法。本模块已附带 `config.json`，声明 `"webui-engine": "ksu"`，MMRL 会据此选用 `ksu` 兼容引擎，而不是它默认的 WebUI X（后者 API 不兼容）。
+
+任何环境下想改配置，都可以用 root shell 直接调 `webctl.sh`（与 WebUI 完全同一套后端）：
+
+```shsu -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh status'
 su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh settime 0730'
 su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh trigger'      # 立刻跑一次内置任务
 su -c 'WEBUI_PIN=123456 sh /data/adb/modules/icbc_daily_water/webctl.sh setpin'
@@ -68,7 +73,7 @@ PIN 刻意**只接受环境变量 `WEBUI_PIN`**，不接受命令行参数，这
 
 ## 安装
 
-1. 从 Releases 下载 `xiaomi-17-pro-automation-v0.12.4.zip`。
+1. 从 Releases 下载 `xiaomi-17-pro-automation-v0.12.5.zip`。
 2. 在 KernelSU / Magisk 中刷入该 zip。
 3. 重启设备后打开模块 WebUI，按需设置解锁方式和 PIN。
 4. 首次使用录制任务时，填写目标 App 包名；切到该 App 后点击「开始录制」，操作完成后点击「停止录制」。
@@ -176,7 +181,7 @@ bash tools/build_zip.sh
 脚本会在仓库父目录生成：
 
 ```text
-xiaomi-17-pro-automation-v0.12.4.zip
+xiaomi-17-pro-automation-v0.12.5.zip
 ```
 
 ## 许可证

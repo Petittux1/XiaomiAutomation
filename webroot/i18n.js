@@ -16,6 +16,9 @@ const STORE_KEY = 'icbcauto.webui.lang';
 const zh = {
   'app.title': '💧 澎湃自动化 · Xiaomi 17 Pro',
   'app.loading': '…',
+  'app.nobridge': '⚠️ 未检测到 root 管理器接口',
+  'app.nobridge.hint': '这个页面要靠 root 管理器打开：所有操作都通过管理器注入的 root 接口执行命令，直接用浏览器打开拿不到任何权限，页面上的报错都是这个原因。',
+  'app.nobridge.fix': '请回到管理器里，从模块列表点开本模块的 WebUI。Magisk 用户请先装 KsuWebUI 或 MMRL —— 两者注入的是同一个接口，本模块不用改任何东西就能用；KernelSU / APatch 及其分支（KernelSU Next、SukiSU Ultra）在管理器里直接打开即可。命令行用户改用 webctl.sh，功能完全一样。',
 
   'btn.save': '保存',
   'btn.show': '显示',
@@ -169,6 +172,9 @@ const zh = {
 const en = {
   'app.title': '💧 XiaomiAutomation · Xiaomi 17 Pro',
   'app.loading': '…',
+  'app.nobridge': '⚠️ No root manager interface detected',
+  'app.nobridge.hint': 'This page has to be opened by a root manager: every action runs a command through the root interface the manager injects. Opened in a plain browser it gets no privileges at all, which is what the errors on this page mean.',
+  'app.nobridge.fix': 'Go back to your manager and open this module\u2019s WebUI from the module list. On Magisk, install KsuWebUI or MMRL first \u2014 both inject the same interface, so this module needs no changes at all; on KernelSU / APatch and their forks (KernelSU Next, SukiSU Ultra) just open it in the manager. From a root shell, use webctl.sh instead \u2014 it does exactly the same thing.',
 
   'btn.save': 'Save',
   'btn.show': 'Show',
@@ -322,6 +328,9 @@ const en = {
 const fr = {
   'app.title': '💧 XiaomiAutomation · Xiaomi 17 Pro',
   'app.loading': '…',
+  'app.nobridge': '⚠️ Aucune interface du gestionnaire root détectée',
+  'app.nobridge.hint': 'Cette page doit être ouverte par un gestionnaire root : chaque action exécute une commande via l\u2019interface root injectée par le gestionnaire. Ouverte dans un simple navigateur, elle n\u2019a aucun privilège \u2014 c\u2019est la cause des messages d\u2019erreur affichés.',
+  'app.nobridge.fix': 'Revenez à votre gestionnaire et ouvrez le WebUI du module depuis la liste. Sur Magisk, installez d\u2019abord KsuWebUI ou MMRL : les deux injectent la même interface, ce module n\u2019a donc aucune modification à faire ; sur KernelSU / APatch et leurs forks (KernelSU Next, SukiSU Ultra), ouvrez-le directement dans le gestionnaire. Depuis un shell root, utilisez webctl.sh \u2014 c\u2019est exactement équivalent.',
 
   'btn.save': 'Enregistrer',
   'btn.show': 'Afficher',
@@ -475,6 +484,9 @@ const fr = {
 const ru = {
   'app.title': '💧 XiaomiAutomation · Xiaomi 17 Pro',
   'app.loading': '…',
+  'app.nobridge': '⚠️ Не обнаружен интерфейс root-менеджера',
+  'app.nobridge.hint': 'Эту страницу должен открывать root-менеджер: каждое действие выполняет команду через интерфейс root, который внедряет менеджер. В обычном браузере прав нет вообще — именно поэтому на странице и появляются ошибки.',
+  'app.nobridge.fix': 'Вернитесь в менеджер и откройте WebUI модуля из списка модулей. На Magisk сначала установите KsuWebUI или MMRL — оба внедряют тот же интерфейс, поэтому модуль менять не нужно; на KernelSU / APatch и их форках (KernelSU Next, SukiSU Ultra) просто откройте его в менеджере. Из root-оболочки используйте webctl.sh — он делает ровно то же самое.',
 
   'btn.save': 'Сохранить',
   'btn.show': 'Показать',

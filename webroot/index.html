@@ -73,6 +73,17 @@
 
   /* ---------- 通用控件 ---------- */
   .hint { font-size: 12px; line-height: 1.6; color: var(--mut); }
+
+  /* ---------- 缺少 root 桥时的整页提示 ----------
+     正常情况下隐藏。只有当页面不在 root 管理器的 WebView 里打开(管理器没注入
+     ksu 全局对象)才显示, 见 app.js 的 bridgeOk()。 */
+  #nobridge {
+    max-width: 560px; margin: 0 auto 14px; padding: 14px 14px 16px;
+    background: var(--card); border: 1px solid var(--warn); border-radius: var(--r);
+  }
+  #nobridge h2 { font-size: 16px; font-weight: 700; color: var(--warn); margin-bottom: 8px; }
+  #nobridge p { font-size: 13px; line-height: 1.7; color: var(--fg); }
+  #nobridge p + p { margin-top: 8px; color: var(--mut); }
   .row { display: flex; align-items: center; gap: 8px; margin-top: var(--gap); }
   .rowwrap { flex-wrap: wrap; }
   .flex1 { flex: 1; min-width: 0; }
@@ -169,6 +180,14 @@
 </style>
 </head>
 <body>
+
+<!-- 缺桥提示: 默认隐藏, 由 app.js 在检测不到 root 管理器注入的 ksu 接口时显示。
+     放在最前面, 保证「打不开」时用户第一眼看到的是原因和办法, 而不是满屏 ERR。 -->
+<div id="nobridge" hidden>
+  <h2 data-i18n="app.nobridge">未检测到 root 管理器接口</h2>
+  <p data-i18n="app.nobridge.hint"></p>
+  <p data-i18n="app.nobridge.fix"></p>
+</div>
 
 <header>
   <h1 data-i18n="app.title">💧 澎湃自动化 · Xiaomi 17 Pro</h1>

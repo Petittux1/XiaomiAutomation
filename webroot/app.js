@@ -1,4 +1,4 @@
-// icbc_daily_water WebUI 逻辑 v0.12.0 (多任务 Profiles + 操作录制 + 多语言 + 后台清理 + 多设备档案 + 文档缓存自愈)
+// icbc_daily_water WebUI 逻辑 v0.12.5 (多任务 Profiles + 操作录制 + 多语言 + 后台清理 + 多设备档案 + 文档缓存自愈)
 // 走 KernelSU 注入的 ksu 接口执行 root 命令
 import { exec, toast, moduleInfo } from './kernelsu.js';
 import { t, setLang, getLang, langLabel, applyI18n, LANGS } from './i18n.js';
@@ -63,6 +63,17 @@ function selfHeal() {
     u.searchParams.set('_cb', BUILD_VC + '.' + Date.now());
     location.replace(u.href);
   } catch (e) { /* URL 改不动(例如 about:blank)就只能等用户手动刷新 */ }
+}
+
+// ---------- root 桥可用性 ----------
+// WebUI 的所有操作都是「执行一条 root 命令」, 而执行通道是管理器注入的全局 ksu
+// 对象: KernelSU(v0.8.0 起)、APatch、以及它们的分支(KernelSU Next / SukiSU Ultra)
+// 都注入这个同名对象, KsuWebUI 和 MMRL 在 Magisk 上也注入同名对象。
+// 这里必须用 typeof 判断: 对象不存在时直接引用 ksu 会抛 ReferenceError, 而这段
+// 代码在模块顶层执行, 一抛整个 app.js 就挂掉、WebUI 直接白屏 —— 恰好是最需要
+// 给出「为什么打不开」的时候。
+function bridgeOk() {
+  return typeof globalThis.ksu !== 'undefined' && globalThis.ksu !== null;
 }
 
 async function run(arg, options) {
@@ -656,8 +667,16 @@ setTimeout(selfHeal, 1500);
 buildLangSelect();
 applyI18n(document);
 refreshFoldBtn();
-loadFoot();
-loadStatus();
-loadDevice();
-loadLog();
-setInterval(() => { loadStatus(); }, 15000);
+
+// 缺桥时只显示整页提示, 不再往下走: 继续跑的话每 15 秒一次的轮询会全失败,
+// 既是满屏 ERR 又是白耗电, 而且会把真正的原因(没注入 root 接口)淹掉。
+if (!bridgeOk()) {
+  const nb = $('nobridge');
+  if (nb) nb.hidden = false;
+} else {
+  loadFoot();
+  loadStatus();
+  loadDevice();
+  loadLog();
+  setInterval(() => { loadStatus(); }, 15000);
+}

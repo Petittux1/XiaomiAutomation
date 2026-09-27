@@ -31,17 +31,20 @@ Il fonctionne par **contrôle root direct** (`screencap` / `getevent` / `sendeve
 
 Le module n'utilise que les points d'entrée standard `customize.sh` + `service.sh` : **ni Zygisk, ni modification de `/system`, ni metamodule requis**. La planification, l'enregistrement/relecture et le déverrouillage PIN fonctionnent donc aussi sous Magisk / APatch.
 
-En revanche, **le WebUI dépend du pont `kernelsu.js` injecté par KernelSU**, que Magisk / APatch ne fournissent pas :
+Le WebUI n'est **pas plus réservé à KernelSU**. APatch propose le WebUI de module depuis la version 10568, et il fait exactement ce que fait KernelSU : il sert `webroot/` depuis `https://mui.kernelsu.org` et injecte un objet global **du même nom**, `ksu` — celui auquel parle le `kernelsu.js` de ce module. Le WebUI fonctionne donc sous APatch sans la moindre modification. Il en va de même pour les forks de KernelSU (KernelSU Next, SukiSU Ultra).
 
-| Fonctionnalité | KernelSU | Magisk / APatch |
-| --- | :---: | :---: |
-| Planification / enregistrement / relecture / déverrouillage PIN | ✅ | ✅ |
-| WebUI du module | ✅ | ❌ (utilisez `webctl.sh` ci-dessous) |
+Magisk est la seule exception : le code amont de Magisk ne contient **aucun code WebView** — pas « non implémenté », simplement aucune capacité de ce type — et il n'affichera donc pas `webroot/` tout seul. Pour y utiliser le WebUI, il faut une application hôte qui en fournisse un :
 
-Sous Magisk / APatch, pilotez le même backend depuis un shell root via `webctl.sh` :
+| Fonctionnalité | KernelSU / forks | APatch | Magisk |
+| --- | :---: | :---: | :---: |
+| Planification / enregistrement / relecture / déverrouillage PIN | ✅ | ✅ | ✅ |
+| WebUI du module | ✅ | ✅ | ✅ avec KsuWebUI ou MMRL |
 
-```sh
-su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh status'
+**KsuWebUI** et **MMRL** obtiennent chacun le root sur Magisk eux-mêmes, puis injectent ce même objet global `ksu` dans `webroot/`. Une fois l'un d'eux installé, ce module ne demande aucune modification et le WebUI fonctionne tel quel — c'est la pratique adoptée dans tout l'écosystème sur Magisk. Ce module fournit un `config.json` déclarant `"webui-engine": "ksu"`, afin que MMRL choisisse son moteur compatible `ksu` plutôt que son WebUI X par défaut (dont l'API n'est pas compatible).
+
+Dans tous les environnements, vous pouvez piloter le même backend depuis un shell root via `webctl.sh` :
+
+```shsu -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh status'
 su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh settime 0730'
 su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh trigger'      # lance immédiatement la tâche intégrée
 su -c 'WEBUI_PIN=123456 sh /data/adb/modules/icbc_daily_water/webctl.sh setpin'
@@ -53,7 +56,7 @@ La liste complète des sous-commandes figure en en-tête du fichier : `webctl.sh
 
 ## Installation
 
-1. Téléchargez `xiaomi-17-pro-automation-v0.12.4.zip` depuis les Releases.
+1. Téléchargez `xiaomi-17-pro-automation-v0.12.5.zip` depuis les Releases.
 2. Flashez ce zip dans KernelSU / Magisk.
 3. Redémarrez, ouvrez le WebUI du module et réglez la méthode de déverrouillage et le code PIN selon vos besoins.
 4. Pour une tâche enregistrée, renseignez le nom de package de l'application cible ; basculez vers cette application et appuyez sur « Démarrer l'enregistrement », puis sur « Arrêter l'enregistrement » lorsque vous avez terminé.
@@ -161,7 +164,7 @@ bash tools/build_zip.sh
 Le script écrit le fichier suivant dans le répertoire parent :
 
 ```text
-xiaomi-17-pro-automation-v0.12.4.zip
+xiaomi-17-pro-automation-v0.12.5.zip
 ```
 
 ## Licence
