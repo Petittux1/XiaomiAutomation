@@ -298,7 +298,24 @@ for pair in "README.md:README.en.md README.fr.md README.ru.md" \
   done
 done
 
-# ---------- README 里的 webctl.sh 示例必须真的能跑 ----------
+# ---------- README 里写的包名必须正好是本次构建的那个 ----------
+# v0.12.6 修 EN/RU 时才发现的漏网: 之前一次误用的 `git checkout -- README.en.md
+# README.ru.md` 把这两份退回 v0.12.4, 连带把「下载 xxx.zip」那一行里的版本号也
+# 退回成 v0.12.4.zip, 而 EN/RU 的安装说明从此指向一个根本不存在的包, 没有任何
+# 守卫拦。所以这里两头都要查: 必须出现本次的包名, 且不能出现任何别的版本号。
+ZIP_NAME="xiaomi-17-pro-automation-${VER}.zip"
+for f in README.md README.en.md README.fr.md README.ru.md; do
+  names=$(grep -oE 'xiaomi-17-pro-automation-v[0-9]+\.[0-9]+\.[0-9]+\.zip' "$STAGE/$f" | sort -u)
+  n=$(printf '%s\n' "$names" | grep -c . || true)
+  [ "$n" = "1" ] || {
+    echo "构建失败: $f 里引用的包名有 $n 个版本(应只有 1 个): $(printf '%s' "$names" | tr '\n' ' ')" >&2; exit 1; }
+  [ "$names" = "$ZIP_NAME" ] || {
+    echo "构建失败: $f 引用的包名是 '$names', 应为 '$ZIP_NAME'" >&2; exit 1; }
+done
+# 产物本身也要对得上(OUT 由 VER 拼出来, 这里防的是有人手改了命名模板)
+[ "$(basename "$OUT")" = "$ZIP_NAME" ] || {
+  echo "构建失败: 产物文件名是 '$(basename "$OUT")', 应为 '$ZIP_NAME'" >&2; exit 1; }
+
 # 文档里写错的命令比没有文档更糟: 用户照抄就失败。四份 README 都会给出
 # webctl.sh 的命令行示例(Magisk / APatch 下没有 WebUI, 只能这么配), 所以
 # 在产物上逐份核对。注意要「逐份」而不是把四份合起来看一次 —— 合并会让其中

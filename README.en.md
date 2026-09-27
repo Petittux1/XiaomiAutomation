@@ -58,7 +58,7 @@ The full subcommand list is in the file header: `webctl.sh status|setpin|settime
 
 ## Installation
 
-1. Download `xiaomi-17-pro-automation-v0.12.4.zip` from Releases.
+1. Download `xiaomi-17-pro-automation-v0.12.6.zip` from Releases.
 2. Flash that zip in KernelSU / Magisk.
 3. Reboot, open the module WebUI and set the unlock method and PIN as needed.
 4. For a recorded task, fill in the target app package name; switch to that app and press "Start recording", then press "Stop recording" when you are done.
@@ -166,7 +166,7 @@ bash tools/build_zip.sh
 The script writes the following file into the parent directory:
 
 ```text
-xiaomi-17-pro-automation-v0.12.4.zip
+xiaomi-17-pro-automation-v0.12.6.zip
 ```
 
 ## License
