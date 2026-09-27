@@ -1,6 +1,6 @@
 # Xiaomi 17 Pro 自动化模块
 
-[English](README.en.md) · [Français](README.fr.md)
+[English](README.en.md) · [Français](README.fr.md) · [Русский](README.ru.md)
 
 面向 **Xiaomi 17 Pro / HyperOS 4** 的 KSU / Magisk root 自动化模块。模块提供多 Profile 定时调度、任意 App 操作录制与回放，并保留内置的工行定时浇水任务。
 
@@ -23,12 +23,13 @@
 - **跑完清理后台**：任务结束后自动 `am force-stop` 目标 App 回收内存，下次任务从干净状态开始；可全局开关，也可按任务单独覆盖。
 - **多语言 WebUI**：中文 / English / Français / Русский，页面右上角可切换，选择会记住。
 - **多设备适配**：内置设备档案层，可按机型调整屏幕尺寸、显示 ID 和锁屏密码宫格位置，让录制、回放和 PIN 自动解锁也能在别的澎湃 4 机型上用；Xiaomi 17 Pro 的实测基线原样保留、不受任何影响。
-- **WebUI 升级即生效**：资源带版本号并禁用缓存，模块更新后不需要卸载重装。
+- **WebUI 升级即生效**：资源带版本号并禁用缓存，页面还会自检「文档是不是旧的」并自动重载 —— 模块更新后不再需要卸载重装。
+- **界面清爽**：概览区一眼看状态，细节收进可折叠分组，首屏不再是一大坨表单；「展开全部 / 收起全部」一键切换。
 - PIN 只写入本机配置，不在状态接口、运行日志或源码中出现明文。
 
 ## 安装
 
-1. 从 Releases 下载 `xiaomi-17-pro-automation-v0.11.0.zip`。
+1. 从 Releases 下载 `xiaomi-17-pro-automation-v0.12.0.zip`。
 2. 在 KernelSU / Magisk 中刷入该 zip。
 3. 重启设备后打开模块 WebUI，按需设置解锁方式和 PIN。
 4. 首次使用录制任务时，填写目标 App 包名；切到该 App 后点击「开始录制」，操作完成后点击「停止录制」。
@@ -45,7 +46,7 @@ id=icbc_daily_water
 
 请不要手动删除这些目录或修改模块 ID；配置、Profile、PIN 和录制动作会继续沿用。
 
-> 如果升级后 WebUI 仍显示旧界面，打开模块 WebUI 确认右上角版本号是否为 `v0.11.0`；若不是，说明装的是旧包。
+> 如果升级后 WebUI 仍显示旧界面，打开模块 WebUI 确认右上角版本号是否为 `v0.12.0`；若不是，说明装的是旧包。
 
 ## 使用说明
 
@@ -136,7 +137,7 @@ bash tools/build_zip.sh
 脚本会在仓库父目录生成：
 
 ```text
-xiaomi-17-pro-automation-v0.11.0.zip
+xiaomi-17-pro-automation-v0.12.0.zip
 ```
 
 ## 许可证

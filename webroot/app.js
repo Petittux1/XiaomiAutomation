@@ -1,4 +1,4 @@
-// icbc_daily_water WebUI 逻辑 v0.10.0 (多任务 Profiles + 操作录制 + 多语言 + 后台清理)
+// icbc_daily_water WebUI 逻辑 v0.12.0 (多任务 Profiles + 操作录制 + 多语言 + 后台清理 + 多设备档案 + 文档缓存自愈)
 // 走 KernelSU 注入的 ksu 接口执行 root 命令
 import { exec, toast, moduleInfo } from './kernelsu.js';
 import { t, setLang, getLang, langLabel, applyI18n, LANGS } from './i18n.js';
@@ -7,6 +7,63 @@ const W = '/data/adb/modules/icbc_daily_water/webctl.sh';
 const $ = (id) => document.getElementById(id);
 let busy = false;
 let recPoll = null;   // 录制状态轮询定时器
+
+// ---------- WebUI 文档缓存自愈 ----------
+// 现象: 模块升级后 WebUI 仍是旧界面, 必须卸载重装才更新。
+// 原因: WebView 缓存的是「文档本身」。index.html 里的 ?v= 只能救子资源 ——
+// 文档陈旧时, 新版本那个 ?v= 压根到不了浏览器。
+// 做法: 构建期把模块版本注进本文件(见 tools/build_zip.sh), 运行时与设备上模块的
+// 实际版本比对; 对不上就说明当前文档是旧的, 换一个新 URL 强制重新拉一次文档。
+// 上限 3 次, 避免极端情况下把用户锁死在刷新循环里。
+//
+// 三处刻意设计, 都是踩出来的:
+// 1) 「源码态」判定不用字符串哨兵(拿占位符原文跟 BUILD_VC 比): 打包时按占位符
+//    做替换, 任何以哨兵字符串为判据的代码都会被一起消化掉, 结果产物里判断恒为
+//    真、自愈直接变成死代码。改用「是不是纯数字 / 有没有 v 前缀」判定 ——
+//    versionCode 永远是纯数字、version 永远带 v, 这两条判据在任何替换下都成立。
+// 2) versionCode 与 version 都注入: 不同 KernelSU 版本的 moduleInfo() 暴露的
+//    字段不一样, 少注入一个就可能整段自愈静默失效。
+// 3) const key 必须算在「一致就清计数」之前: const 有暂时性死区, 被后面才声明
+//    的辅助函数引用会抛 ReferenceError, 而这里是在模块顶层调用的, 一抛就整个
+//    app.js 挂掉、WebUI 直接白屏。所以这里干脆不写辅助函数, 全部顺序执行。
+const BUILD_VC = '__BUILD_VC__';
+const BUILD_VER = '__BUILD_VER__';
+const HEAL_KEY = 'icbw.heal';
+
+function selfHeal() {
+  if (!/^\d+$/.test(BUILD_VC) || BUILD_VER.charAt(0) !== 'v') return;   // 源码态不做处理
+  let mi = null;
+  try { mi = moduleInfo(); } catch (e) { return; }   // ksu 桥未就绪, 等下次重试
+  if (!mi) return;
+  // 设备侧版本标识: 优先 versionCode, 退化到 version 字符串; 两条都认。
+  let devTag = '';
+  let same = false;
+  if (mi.versionCode != null && String(mi.versionCode).trim() !== '') {
+    devTag = 'c:' + String(mi.versionCode).trim();
+    if (devTag === 'c:' + BUILD_VC) same = true;
+  }
+  if (mi.version) {
+    const v = String(mi.version).trim().replace(/^v/i, '');
+    if (v === BUILD_VER.replace(/^v/i, '')) same = true;
+    if (!devTag) devTag = 'v:' + v;
+  }
+  if (!devTag) return;                               // 拿不到任何版本信息, 放弃
+  const key = HEAL_KEY + '.' + devTag;
+  if (same) {                                        // 文档与模块一致, 清掉计数
+    try { sessionStorage.removeItem(key); } catch (e) {}
+    return;
+  }
+  // 文档与模块对不上 => 当前文档是旧的, 换新 URL 强制重拉一次
+  let n = 0;
+  try { n = parseInt(sessionStorage.getItem(key) || '0', 10) || 0; } catch (e) {}
+  if (n >= 3) return;
+  try { sessionStorage.setItem(key, String(n + 1)); } catch (e) {}
+  try {
+    const u = new URL(location.href);
+    u.searchParams.set('_cb', BUILD_VC + '.' + Date.now());
+    location.replace(u.href);
+  } catch (e) { /* URL 改不动(例如 about:blank)就只能等用户手动刷新 */ }
+}
 
 async function run(arg, options) {
   try {
@@ -81,6 +138,12 @@ async function loadStatus() {
     chkRow(t('chk.fail'), failOk ? t('chk.failN', { n: failN }) : t('chk.failBlocked', { n: failN }), failOk)
   ];
   $('chk').innerHTML = rows.join('');
+  // 概览区: 守护服务状态也做成一枚徽标, 不用展开「触发检查」就能看到
+  const sp = $('svcpill');
+  if (sp) {
+    sp.textContent = svcRun ? t('st.svcRun') : t('st.svcStop');
+    sp.className = 'chip ' + (svcRun ? 'ok' : 'warn');
+  }
   loadProfiles();
 }
 
@@ -360,10 +423,30 @@ function buildLangSelect() {
   sel.value = getLang();
 }
 
+// ---------- 折叠分组 ----------
+// 页面默认只展开「定时」和「任务」, 其余收起来 —— 首屏不再是一大坨表单。
+// 需要看全部时点概览区的「展开全部」, 之后再一键收起。
+const SEC_SEL = 'main > details.sec';
+
+function secsAll() { return document.querySelectorAll(SEC_SEL); }
+
+function foldAll(open) {
+  secsAll().forEach((d) => { d.open = open; });
+  refreshFoldBtn();
+}
+
+function refreshFoldBtn() {
+  const b = $('btnFold');
+  if (!b) return;
+  const anyOpen = Array.prototype.some.call(secsAll(), (d) => d.open);
+  b.textContent = anyOpen ? t('ui.collapse') : t('ui.expand');
+}
+
 // 切换语言后整页重绘: 静态文案由 applyI18n 处理, 动态文案(状态/任务卡/日志)重跑一次。
 function onLangChange() {
   setLang($('lang').value);
   loadFoot();
+  refreshFoldBtn();
   loadStatus();
   loadLog();
 }
@@ -380,6 +463,10 @@ $('btnShow').addEventListener('click', () => {
 });
 
 $('lang').addEventListener('change', onLangChange);
+$('btnFold').addEventListener('click', () => {
+  const anyOpen = Array.prototype.some.call(secsAll(), (d) => d.open);
+  foldAll(!anyOpen);
+});
 
 $('enable').addEventListener('change', (e) => toggle('setenable', e.target.checked ? '1' : '0', t('toast.savedOn'), t('toast.savedOff')));
 $('watch').addEventListener('change', (e) => toggle('setwatch', e.target.checked ? '1' : '0', t('toast.savedOn'), t('toast.savedOff')));
@@ -545,19 +632,26 @@ async function devSave() {
 }
 
 // 设备卡事件挂载
+// 注意: 改版后卡片是 <details class="sec">, 不再有 .card 外层, 所以取最近的 <details>。
 (function () {
-  const card = $('devApply') ? $('devApply').closest('.card') : null;
-  if (!card) return;
-  card.addEventListener('input', devMarkDirty);
-  card.addEventListener('change', devMarkDirty);
+  const box = $('devApply') ? $('devApply').closest('details') : null;
+  if (!box) return;
+  box.addEventListener('input', devMarkDirty);
+  box.addEventListener('change', devMarkDirty);
   const bDet = $('btnDevDetect'), bSave = $('btnDevSave');
   if (bDet) bDet.addEventListener('click', devDetect);
   if (bSave) bSave.addEventListener('click', devSave);
 })();
 
+// 文档缓存自愈: 立刻试一次, 桥未就绪时再补两下。
+selfHeal();
+setTimeout(selfHeal, 400);
+setTimeout(selfHeal, 1500);
+
 // 初次加载: 先定语言(静态文案立即替换), 再拉状态
 buildLangSelect();
 applyI18n(document);
+refreshFoldBtn();
 loadFoot();
 loadStatus();
 loadDevice();

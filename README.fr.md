@@ -1,6 +1,6 @@
 # Automatisation Xiaomi 17 Pro
 
-[中文](README.md) · [English](README.en.md)
+[中文](README.md) · [English](README.en.md) · [Русский](README.ru.md)
 
 Un module d'automatisation root KSU / Magisk pour le **Xiaomi 17 Pro / HyperOS 4**. Il fournit une planification multi-profils, l'enregistrement et la relecture des gestes de n'importe quelle application, et conserve la tâche intégrée d'arrosage quotidien d'ICBC.
 
@@ -23,12 +23,13 @@ Il fonctionne par **contrôle root direct** (`screencap` / `getevent` / `sendeve
 - **Nettoyage de l'arrière-plan après chaque exécution** : l'application cible est fermée avec `am force-stop` à la fin de la tâche, afin qu'elle ne retienne plus de mémoire et que la tâche suivante démarre dans un état propre. Un interrupteur global, plus une surcharge par tâche.
 - **WebUI multilingue** : chinois / English / Français / Русский, sélectionnable en haut à droite ; le choix est mémorisé.
 - **Prise en charge de plusieurs appareils** : une couche de profil d'appareil permet d'ajuster par modèle la taille de l'écran, l'ID d'affichage et la disposition du pavé numérique de l'écran de verrouillage, afin que l'enregistrement, la relecture et le déverrouillage PIN fonctionnent aussi sur d'autres téléphones HyperOS 4. La base mesurée du Xiaomi 17 Pro est conservée telle quelle et n'est pas affectée.
-- **Le WebUI se met à jour avec le module** : les ressources portent une version et la mise en cache est désactivée, plus besoin de désinstaller puis réinstaller.
+- **Le WebUI se met à jour avec le module** : les ressources portent une version, la mise en cache est désactivée, et la page vérifie d'elle-même si le document est périmé puis le recharge — plus besoin de désinstaller puis réinstaller après une mise à jour.
+- **Une interface plus aérée** : un résumé d'état en haut, tout le détail rangé dans des sections repliables, pour que le premier écran ne soit plus un mur de formulaire ; tout déplier / tout replier en un geste.
 - Le code PIN n'est écrit que dans la configuration locale et n'apparaît jamais dans l'état, le journal ni le code source.
 
 ## Installation
 
-1. Téléchargez `xiaomi-17-pro-automation-v0.11.0.zip` depuis les Releases.
+1. Téléchargez `xiaomi-17-pro-automation-v0.12.0.zip` depuis les Releases.
 2. Flashez ce zip dans KernelSU / Magisk.
 3. Redémarrez, ouvrez le WebUI du module et réglez la méthode de déverrouillage et le code PIN selon vos besoins.
 4. Pour une tâche enregistrée, renseignez le nom de package de l'application cible ; basculez vers cette application et appuyez sur « Démarrer l'enregistrement », puis sur « Arrêter l'enregistrement » lorsque vous avez terminé.
@@ -45,7 +46,7 @@ id=icbc_daily_water
 
 Ne supprimez pas ces répertoires et ne modifiez pas l'identifiant du module ; votre configuration, vos profils, votre code PIN et vos actions enregistrées sont conservés.
 
-> Si le WebUI semble encore obsolète après la mise à jour, vérifiez la version en haut à droite : elle doit indiquer `v0.11.0`. Sinon, l'ancien paquet a été installé.
+> Si le WebUI semble encore obsolète après la mise à jour, vérifiez la version en haut à droite : elle doit indiquer `v0.12.0`. Sinon, l'ancien paquet a été installé.
 
 ## Utilisation
 
@@ -136,7 +137,7 @@ bash tools/build_zip.sh
 Le script écrit le fichier suivant dans le répertoire parent :
 
 ```text
-xiaomi-17-pro-automation-v0.11.0.zip
+xiaomi-17-pro-automation-v0.12.0.zip
 ```
 
 ## Licence

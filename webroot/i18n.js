@@ -133,7 +133,6 @@ const zh = {
 
   // v0.11.0 设备档案 / 跨设备回放缩放
   'dev.title': "📱 设备档案",
-  'dev.hint': "只影响屏幕尺寸、显示 ID 和锁屏密码宫格位置，用来适配别的机器。Xiaomi 17 Pro 用下面这套已实测的值，不要改。除 17 Pro 外的机型都标「测试中」：工行流程不保证可用，但录制、回放和 PIN 自动解锁可正常使用。",
   'dev.model': "机型",
   'dev.label': "显示名",
   'dev.apply': "启用覆盖",
@@ -155,6 +154,15 @@ const zh = {
   'opt.scale.on': "按比例缩放",
   'toast.profScaleSaved': "该任务的缩放设置已保存",
 
+
+  // v0.12.0 界面重构: 概览区 / 折叠分组 / 键名标签
+  'hero.hint': '到点自动：亮屏 → 解锁 → 跑任务 → 熄屏。下面各项按需展开，改完即时生效。',
+  'ui.collapse': '收起全部',
+  'ui.expand': '展开全部',
+  'lbl.time': '浇水时间',
+  'prof.new': '新增任务：脚本型任务（工行定时浇水）是内置的；这里新建的都是录制型。',
+  'dev.hint.short': '默认就是 17 Pro 的实测值，别改。换机器时点「自动检测」填好再勾选「启用覆盖」。',
+  'card.log.hint': '最近 60 行',
   'foot.ver': '模块 {ver} · 语言 {lang}',
 };
 
@@ -278,7 +286,6 @@ const en = {
 
   // v0.11.0 设备档案 / 跨设备回放缩放
   'dev.title': "📱 Device profile",
-  'dev.hint': "Only affects screen size, display ID and the lock-screen keypad layout, so the module can be used on other phones. Xiaomi 17 Pro uses the measured values below — do not change them. Models other than 17 Pro are marked \"testing\": the ICBC flow is not guaranteed there, but recording, replay and PIN auto-unlock work normally.",
   'dev.model': "Model",
   'dev.label': "Display name",
   'dev.apply': "Enable override",
@@ -300,6 +307,15 @@ const en = {
   'opt.scale.on': "Scale to screen",
   'toast.profScaleSaved': "Scaling setting saved for this task",
 
+
+  // v0.12.0 界面重构: 概览区 / 折叠分组 / 键名标签
+  'hero.hint': 'On schedule it wakes, unlocks, runs the tasks and turns the screen back off. Expand the sections below as needed — changes take effect immediately.',
+  'ui.collapse': 'Collapse all',
+  'ui.expand': 'Expand all',
+  'lbl.time': 'Watering time',
+  'prof.new': 'Add a task: script tasks (the built-in ICBC watering) are provided; anything you create here is a recorded one.',
+  'dev.hint.short': 'The defaults are the measured 17 Pro values — do not change them. On another phone press “Auto-detect this phone”, check the numbers, then tick “Enable override”.',
+  'card.log.hint': 'Last 60 lines',
   'foot.ver': 'Module {ver} · Language {lang}',
 };
 
@@ -423,7 +439,6 @@ const fr = {
 
   // v0.11.0 设备档案 / 跨设备回放缩放
   'dev.title': "📱 Profil d'appareil",
-  'dev.hint': "N'affecte que la taille de l'écran, l'identifiant d'affichage et le pavé numérique de l'écran de verrouillage, afin d'utiliser le module sur d'autres téléphones. Le Xiaomi 17 Pro utilise les valeurs mesurées ci-dessous — ne les modifiez pas. Les modèles autres que le 17 Pro sont marqués « en test » : le parcours ICBC n'y est pas garanti, mais l'enregistrement, la relecture et le déverrouillage PIN fonctionnent normalement.",
   'dev.model': "Modèle",
   'dev.label': "Nom affiché",
   'dev.apply': "Activer le remplacement",
@@ -445,6 +460,15 @@ const fr = {
   'opt.scale.on': "Mettre à l'échelle",
   'toast.profScaleSaved': "Réglage d'échelle enregistré pour cette tâche",
 
+
+  // v0.12.0 界面重构: 概览区 / 折叠分组 / 键名标签
+  'hero.hint': 'À l\'heure prévue, le module réveille l\'écran, déverrouille, exécute les tâches puis l\'éteint. Dépliez les sections ci-dessous au besoin — les modifications sont immédiatement effectives.',
+  'ui.collapse': 'Tout replier',
+  'ui.expand': 'Tout déplier',
+  'lbl.time': 'Heure d\'arrosage',
+  'prof.new': 'Ajouter une tâche : les tâches script (l\'arrosage ICBC intégré) sont fournies ; tout ce que vous créez ici est une tâche enregistrée.',
+  'dev.hint.short': 'Les valeurs par défaut sont celles mesurées sur le 17 Pro — ne les modifiez pas. Sur un autre téléphone, appuyez sur « Détecter ce téléphone », vérifiez les valeurs, puis cochez « Activer le remplacement ».',
+  'card.log.hint': '60 dernières lignes',
   'foot.ver': 'Module {ver} · Langue {lang}',
 };
 
@@ -568,7 +592,6 @@ const ru = {
 
   // v0.11.0 设备档案 / 跨设备回放缩放
   'dev.title': "📱 Профиль устройства",
-  'dev.hint': "Влияет только на размер экрана, ID дисплея и раскладку цифровой клавиатуры на экране блокировки — чтобы модуль работал на других телефонах. Xiaomi 17 Pro использует измеренные значения ниже — не меняйте их. Модели кроме 17 Pro помечены «тестируется»: сценарий ICBC там не гарантирован, но запись, воспроизведение и разблокировка по PIN работают нормально.",
   'dev.model': "Модель",
   'dev.label': "Отображаемое имя",
   'dev.apply': "Включить переопределение",
@@ -590,6 +613,15 @@ const ru = {
   'opt.scale.on': "Масштабировать",
   'toast.profScaleSaved': "Настройка масштаба сохранена для этой задачи",
 
+
+  // v0.12.0 界面重构: 概览区 / 折叠分组 / 键名标签
+  'hero.hint': 'По расписанию модуль будит экран, разблокирует, выполняет задачи и гасит экран. Разверните разделы ниже по мере надобности — изменения вступают в силу сразу.',
+  'ui.collapse': 'Свернуть всё',
+  'ui.expand': 'Развернуть всё',
+  'lbl.time': 'Время полива',
+  'prof.new': 'Добавить задачу: скриптовые задачи (встроенный полив ICBC) уже есть; всё, что вы создадите здесь, — записываемые.',
+  'dev.hint.short': 'По умолчанию стоят измеренные значения 17 Pro — не меняйте их. На другом телефоне нажмите «Определить этот телефон», проверьте значения, затем поставьте «Включить переопределение».',
+  'card.log.hint': 'Последние 60 строк',
   'foot.ver': 'Модуль {ver} · Язык {lang}',
 };
 
