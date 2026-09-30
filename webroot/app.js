@@ -8,6 +8,15 @@ const $ = (id) => document.getElementById(id);
 let busy = false;
 let recPoll = null;   // 录制状态轮询定时器
 
+// 全局默认「浇水时间 / 定时开关」。原本这两处是直接读 card.time 卡片里的 DOM
+// (#time / #enable) —— 那张卡在 v0.12.8 去重时被删了, 而读引用有三处(下面的
+// loadStatus / loadProfiles 各一处), 漏一处就会在模块顶层抛 TypeError 把整个
+// app.js 挂掉、WebUI 白屏。改成由 loadStatus() 从 webctl status 单向灌进来,
+// loadProfiles() 只读不写。
+// 值格式都是 HHMM(如 '0730'), 与 webctl status 的 sched= / enable= 一致。
+let gloSched = '0730';
+let gloEn = true;
+
 // ---------- WebUI 文档缓存自愈 ----------
 // 现象: 模块升级后 WebUI 仍是旧界面, 必须卸载重装才更新。
 // 原因: WebView 缓存的是「文档本身」。index.html 里的 ?v= 只能救子资源 ——
@@ -122,10 +131,9 @@ async function loadStatus() {
   const td = $('today');
   if (cfg._today === 'DONE') { td.textContent = t('st.todayDone'); td.className = 'pill ok'; }
   else { td.textContent = t('st.todayPending'); td.className = 'pill warn'; }
-  // 时间与开关
-  const tt = cfg.SCHED_TIME || '0730';
-  $('time').value = tt.slice(0, 2) + ':' + tt.slice(2);
-  $('enable').checked = cfg.SCHED_ENABLE === '1';
+  // 时间与开关: 只灌给模块级变量, 不再写 DOM(见文件头 gloSched/gloEn 的说明)
+  gloSched = cfg.SCHED_TIME || '0730';
+  gloEn = cfg.SCHED_ENABLE === '1';
   $('watch').checked = cfg.WATCH_OPEN === '1';
   $('sleep').checked = cfg.SLEEP_AFTER === '1';
   // 老配置里没有 CLEANUP_AFTER 时保持模块默认值(开), 与 service.sh 的回落一致。
@@ -185,12 +193,13 @@ async function loadProfiles() {
     list.push(p);
   }
   if (!list.length) { box.innerHTML = '<p class="midi">' + esc(t('prof.empty')) + '</p>'; return; }
-  const gloSched = ($('time').value || '07:30').replace(':', '');
+  // gloSched/gloEn 用模块级的(loadStatus 已灌好), 不再从 DOM 读 —— 那两个元素
+  // 随 card.time 卡片一起删掉了, 这里再读就是顶层 TypeError 白屏。
   const gloClean = $('cleanup').checked;
   box.innerHTML = list.map((p) => {
     // 继承: p_sched/p_enable/pcleanup 为空时用全局
     const sched = p.psched || gloSched;
-    const en = p.penable === '1' ? true : (p.penable === '' ? $('enable').checked : false);
+    const en = p.penable === '1' ? true : (p.penable === '' ? gloEn : false);
     const isScript = (p.ptype || 'script') === 'script';
     const isRec = p.slug === recSlug;
     const hasPkg = !!(p.ppkg && p.ppkg !== '');
@@ -269,18 +278,10 @@ async function pollRec() {
 }
 
 // ---------- 保存动作 ----------
-async function saveTime() {
-  if (busy) return;
-  const v = $('time').value; // HH:MM
-  if (!/^\d{2}:\d{2}$/.test(v)) { toastMsg(t('toast.timeBad')); return; }
-  const hhmm = v.replace(':', '');
-  busy = true;
-  const r = await run('settime ' + hhmm);
-  busy = false;
-  if (isErr(r)) { errToast(r); return; }
-  toastMsg(t('toast.timeSaved'));
-  loadStatus(); loadLog();
-}
+// 保存浇水时间的 saveTime() 已随 card.time 卡片一起删除: 时间现在在 profile 行里
+// 保存(onProfAct 的 pTimeSave -> `profile set <slug> p_sched`), 写的是 profile 自己的
+// P_SCHED, 而 P_SCHED 才是调度器真正读的那个值。
+// 命令行的 webctl.sh settime 仍然保留并已改成同步写 P_SCHED(见 webctl.sh)。
 
 async function savePin() {
   if (busy) return;
@@ -467,7 +468,7 @@ function onLangChange() {
 }
 
 // ---------- 事件 ----------
-$('btnTime').addEventListener('click', saveTime);
+// (btnTime 的监听随 card.time 卡片一起删掉了 —— 保存时间现在走 profile 行的 pTimeSave)
 $('btnPin').addEventListener('click', savePin);
 $('btnPAdd').addEventListener('click', addProfile);
 $('btnShow').addEventListener('click', () => {
@@ -483,7 +484,8 @@ $('btnFold').addEventListener('click', () => {
   foldAll(!anyOpen);
 });
 
-$('enable').addEventListener('change', (e) => toggle('setenable', e.target.checked ? '1' : '0', t('toast.savedOn'), t('toast.savedOff')));
+// (enable 的监听随 card.time 卡片一起删掉了 —— 定时开关现在按 profile 各自设,
+//  走的是下面 profs 那条委托里的 pEnable -> `profile set <slug> p_enable`)
 $('watch').addEventListener('change', (e) => toggle('setwatch', e.target.checked ? '1' : '0', t('toast.savedOn'), t('toast.savedOff')));
 $('sleep').addEventListener('change', (e) => toggle('setsleep', e.target.checked ? '1' : '0', t('toast.savedOn'), t('toast.savedOff')));
 $('cleanup').addEventListener('change', (e) => toggle('setcleanup', e.target.checked ? '1' : '0', t('toast.cleanupSaved'), t('toast.cleanupOff')));
@@ -492,15 +494,7 @@ $('mode').addEventListener('change', (e) => toggle('setmode', e.target.value, nu
 $('profs').addEventListener('click', (e) => onProfAct(e, 'click'));
 $('profs').addEventListener('change', (e) => onProfAct(e, 'change'));
 
-$('btnTrigger').addEventListener('click', async () => {
-  if (busy) return;
-  busy = true;
-  const r = await run('trigger');
-  busy = false;
-  if (isErr(r)) { errToast(r); return; }
-  toastMsg(t('toast.trigAll'));
-  setTimeout(loadStatus, 3000);
-});
+// (btnTrigger 已随「立即浇水」去重删除 —— 运行任务统一走 profile 行的 pRun)
 
 $('btnRestart').addEventListener('click', async () => {
   if (busy) return;

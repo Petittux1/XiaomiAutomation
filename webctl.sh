@@ -346,6 +346,20 @@ case "$1" in
     HH=${V%??}; MM=${V#??}
     if [ "$HH" -gt 23 ] || [ "$MM" -gt 59 ]; then echo "ERR invalid HHMM"; exit 1; fi
     setval SCHED_TIME "$V"
+    # 同步内置工行 profile 的 P_SCHED —— settime 是不是真的生效就看这一步。
+    # 调度器取的是 PSCHED=${P_SCHED:-$SCHED_TIME}, 而内置 profile 一生下来就把
+    # SCHED_TIME 快照进了 P_SCHED(service.sh ensure_profiles / customize.sh 安装时写),
+    # 所以只写 SCHED_TIME 的话, 工行永远按安装那一刻的旧时间跑, 这条命令成空操作。
+    # 四份 README 都拿 `webctl.sh settime 0730` 当命令行用法示例, 必须真生效。
+    # 写 profile 而不是反过来删 P_SCHED: 一个 profile 有自己的 P_SCHED 是合法状态
+    # (用户在 WebUI 里给它单独设过), 不能因为全局改动就把那层覆盖删掉。
+    if [ -f "$PFX/icbc/conf" ]; then
+      if ! atomic_update "$PFX/icbc/conf" P_SCHED "$V"; then
+        echo "ERR write icbc profile sched"
+        exit 1
+      fi
+      echo "SET P_SCHED=$V (icbc)"
+    fi
     ;;
   setenable)
     case "$2" in 1|0) setval SCHED_ENABLE "$2";; *) echo "ERR enable 0/1"; exit 1;; esac

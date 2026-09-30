@@ -203,7 +203,11 @@
   </div>
   <p class="hint" data-i18n="hero.hint"></p>
   <div class="hero-btns">
-    <button id="btnTrigger" class="primary" data-i18n="btn.runNow">💧 立即浇水（测试）</button>
+    <!-- 这里原本还有一个「💧 立即浇水（测试）」(#btnTrigger), 它调 `trigger` 无参数,
+         而无参数的默认就是内置工行 —— 与下面工行 profile 行的「立即浇水」
+         (`trigger icbc`) 是同一个操作, 文案也几乎一样。按用户要求一起去重:
+         运行类操作统一由每个 profile 行自己发, 顶部不再放一个写死工行的快捷键
+         (有了多个任务之后, 顶部这个按钮只跑工行反而会误导)。 -->
     <button id="btnRefresh" class="ghost" data-i18n="btn.refresh">刷新</button>
     <button id="btnRestart" class="ghost" data-i18n="btn.restart">重启服务</button>
     <button id="btnFold" class="ghost" data-i18n="ui.collapse">收起全部</button>
@@ -211,22 +215,19 @@
 </div>
 
 <main>
-  <details class="sec" open>
-    <summary data-i18n="card.time.title">⏰ 每日浇水时间</summary>
-    <div class="sbody">
-      <p class="hint" data-i18n="card.time.hint"></p>
-      <div class="grid2">
-        <label class="fld"><span data-i18n="lbl.time">浇水时间</span><input type="time" id="time" value="07:30"></label>
-        <button id="btnTime" class="primary" data-i18n="btn.save">保存</button>
-      </div>
-      <label class="sw"><span data-i18n="lbl.schedEnable">启用定时自动浇水</span><input type="checkbox" id="enable"></label>
-    </div>
-  </details>
-
+  <!-- 任务 Profiles 是「什么时候浇水」的唯一出处。
+       原来这里上面还有一张「⏰ 每日浇水时间」卡, 写的是 sched.conf 的全局 SCHED_TIME,
+       而调度器取的是 profile 自己的 P_SCHED(service.sh: PSCHED=${P_SCHED:-$SCHED_TIME})。
+       内置工行 profile 在创建时就把 SCHED_TIME 快照进了 P_SCHED(customize.sh / service.sh
+       ensure_profiles), 于是那张卡改完对工行根本不生效 —— 是个死控件, 而且让人以为
+       「有两套定时」。删除它, 每个 profile 行自己的时间+开关就是唯一真相。 -->
   <details class="sec" open>
     <summary data-i18n="card.prof.title">📁 任务 Profiles</summary>
     <div class="sbody">
       <p class="hint" data-i18n="card.prof.hint"></p>
+      <!-- 原 card.time.hint 的内容, 随卡片一起去重搬过来: 说清「到点之后会发生什么」
+           以及为什么默认 07:30, 这两条信息本身是对的, 不该跟着卡片一起被删掉。 -->
+      <p class="hint" data-i18n="prof.schedHint"></p>
       <div id="profs"></div>
       <p class="fldcap" data-i18n="scale.hint"></p>
       <p class="fldcap" data-i18n="prof.new"></p>
