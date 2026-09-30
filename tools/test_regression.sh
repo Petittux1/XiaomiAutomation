@@ -8,12 +8,13 @@
 #   所以这次改成把不变量直接写成断言: 不需要沙箱, 不需要预先录好的输出,
 #   任何时候 clone 下来都能跑, 再丢一次也无所谓。
 #
-# 五条守卫各挡一类真实发生过/差一点发生的事故:
+# 六条守卫各挡一类真实发生过/差一点发生的事故:
 #   1) water.sh 的 17 Pro 基线取值 —— 防「顺手改坐标/阈值」把唯一实测过的机型改挂
 #   2) service.sh 的单命中          —— 防同一天浇两次(重复触发是最恶劣的失败模式)
 #   3) app.js 的 DOM 引用           —— 防删元素后白屏(删 card.time 时真的会踩到)
 #   4) i18n 四语键集一致            —— 防只删/只加了一种语言的键
 #   5) water.sh 的截图生命周期      —— 防取证图重新开始永久残留
+#   6) 内容区 md5 的字节范围        —— 防「坐标没动但判定输入挪了位」(v0.12.8 踩过)
 #
 # 用法: bash tools/test_regression.sh          (在仓库根目录)
 # 退出码: 0 = 全绿, 1 = 有守卫失败
@@ -317,6 +318,120 @@ else:
     print('  FAIL SNAP 默认值不是 0 —— 每次运行都会往 /sdcard/Download 里堆全屏 PNG')
     bad += 1
 
+sys.exit(1 if bad else 0)
+PY
+
+
+# ============ 6. 内容区 md5 的字节范围 ============
+# 「只改等多久」这条约束有个很隐蔽的违反方式: 坐标、阈值、原语一个没动, 但喂给
+# 判定的那片像素挪了位置。v0.12.8 把 dd bs=1 换成 bs=4096 对齐就是这么滑过去的 ——
+# 1464012 整除不了 4096 (两者最大公约数只有 4), 向上取整后起点偏出 y300 约 0.48 行,
+# md5 跟基线再也不一样, 而守卫 1 的坐标/阈值/函数体三条断言全都照常通过。
+#
+# 这条守卫不读实现、不认 dd/tail/head 的写法, 直接把两边的 hash 拿去跑同一份
+# 合成底片, 再按字节边界打标记: 只要范围的起点或长度差一个字节, 标记就会落进
+# 一侧、落在另一侧之外, md5 立刻分家。所以以后换成任何实现都仍然受它管。
+sec "6. 内容区 md5 的字节范围 vs v0.10.0"
+
+python3 - <<'PY' || FAILS=$((FAILS+1))
+import hashlib, os, re, subprocess, sys, tempfile
+
+bad = 0
+
+# --- 基线范围: 从 v0.10.0 tag 里把那行 dd 的算式抠出来, 不手抄 ---
+try:
+    old = subprocess.run(['git', 'show', 'v0.10.0:water.sh'],
+                         capture_output=True, text=True, check=True).stdout
+except Exception as e:
+    print('  FAIL 读不到 v0.10.0:water.sh (%s)' % e)
+    sys.exit(1)
+
+m = re.search(r'dd if=\$RAW bs=1 skip=\$\(\((.*?)\)\)\s+count=\$\(\((.*?)\)\)', old)
+if not m:
+    print('  FAIL v0.10.0 里找不到 dd bs=1 的 skip/count 算式 —— 守卫清单需要更新')
+    sys.exit(1)
+skip_e, count_e = m.group(1), m.group(2)
+
+new = open('water.sh', encoding='utf-8').read()
+sw_m = re.search(r'^SW=(\d+)', new, re.M)
+if not sw_m:
+    print('  FAIL water.sh 里读不到 SW= —— 无法算出基线范围')
+    sys.exit(1)
+SW = int(sw_m.group(1))
+
+# 算式里只有整数四则和 $SW, 用受限命名空间求值即可(本仓库自己的代码)
+def ev(expr):
+    return eval(re.sub(r'\$SW\b', str(SW), expr), {'__builtins__': {}}, {})
+
+START, LENGTH = ev(skip_e), ev(count_e)
+END = START + LENGTH
+print('  基线范围 [%d, %d)  长度 %d  (SW=%d)' % (START, END, LENGTH, SW))
+
+# --- 当前实现: 抽顶层赋值 + 包住 md5sum 的那个函数 ---
+lines = new.split('\n')
+assigns = '\n'.join(l for l in lines if re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', l))
+
+md5_i = next((i for i, l in enumerate(lines)
+              if '| md5sum' in l and not l.lstrip().startswith('#')), None)
+if md5_i is None:
+    print('  FAIL water.sh 里没有 | md5sum 的哈希语句 —— 守卫清单需要更新')
+    sys.exit(1)
+
+body, call = None, None
+for i in range(md5_i, -1, -1):
+    fm = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)\(\)', lines[i])
+    if fm:
+        for j in range(i + 1, len(lines)):
+            if lines[j] == '}':
+                body = '\n'.join(lines[i:j + 1])
+                call = fm.group(1)
+                break
+        break
+if body is None:
+    # 内联写法(没有函数): 只取 | md5sum 之前那一段当生产者
+    seg = lines[md5_i].split('| md5sum')[0].strip()
+    seg = re.sub(r'^\w+=\$\(', '', seg)
+    body, call = '%s() { %s; }' % ('__hash__', seg), '__hash__'
+
+# --- 合成底片: 全 0, 再按需在边界上打一个 0x01 的标记 ---
+size = END + 4096
+probes = [(None, '全 0 (查长度)'), (START - 1, '起点前一字节'),
+          (START, '起点字节'), (END - 1, '终点前一字节'), (END, '终点字节')]
+
+tmp = tempfile.mkdtemp(prefix='zx_hash_guard_')
+try:
+    with open(os.path.join(tmp, 't.bin'), 'wb') as f:
+        f.write(bytes(size))
+    path = os.path.join(tmp, 't.bin')
+
+    script = os.path.join(tmp, 'h.sh')
+    with open(script, 'w') as f:
+        f.write(assigns + '\n' + body + '\nRAW="$1"\n%s\n' % call)
+
+    for pos, label in probes:
+        with open(path, 'r+b') as f:
+            f.truncate(size)
+            f.seek(0); f.write(bytes(size))
+            if pos is not None:
+                if not (0 <= pos < size):
+                    print('  FAIL 探针位置 %d 越界' % pos); bad += 1; continue
+                f.seek(pos); f.write(b'\x01')
+
+        data = open(path, 'rb').read()
+        base = hashlib.md5(data[START:END]).hexdigest()
+        got = subprocess.run(['sh', script, path],
+                             capture_output=True, text=True).stdout.strip()
+        if got == base:
+            print('  ok   %s -> md5 %s 与基线一致' % (label, base[:16]))
+        else:
+            print('  FAIL %s -> md5 %s, 基线 %s  —— 喂给判定的像素范围变了'
+                  % (label, got[:16] or '(空)', base[:16]))
+            bad += 1
+finally:
+    subprocess.run(['rm', '-rf', tmp])
+
+if bad == 0:
+    print('  ok   5 个边界探针全部一致 = 内容区范围与 v0.10.0 逐字节相同')
 sys.exit(1 if bad else 0)
 PY
 
