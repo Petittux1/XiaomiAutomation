@@ -189,6 +189,27 @@ dev_read() {
   sed -n "s/^$1=\(.*\)$/\1/p" "$DEV_FILE" 2>/dev/null | head -1
 }
 
+# 删掉一个键。atomic_update 只会「设值」, 关总闸时要把上一台机器的分辨率整个删掉:
+# 否则注释写「清掉」而实现只改不删, 下次打开界面读到的仍是旧机器的 1440x3200。
+dev_clear() {
+  [ -f "$DEV_FILE" ] || return 0
+  DC_TMP=$DEV_FILE.tmp.$$
+  rm -f "$DC_TMP" 2>/dev/null
+  if ! ( umask 077; : > "$DC_TMP" ); then return 1; fi
+  while IFS= read -r DC_LINE || [ -n "$DC_LINE" ]; do
+    case "$DC_LINE" in
+      "$1="*) ;;
+      *) printf '%s\n' "$DC_LINE" >> "$DC_TMP";;
+    esac
+  done < "$DEV_FILE"
+  chmod 600 "$DC_TMP" 2>/dev/null || { rm -f "$DC_TMP" 2>/dev/null; return 1; }
+  if ! mv "$DC_TMP" "$DEV_FILE" 2>/dev/null; then
+    rm -f "$DC_TMP" 2>/dev/null
+    return 1
+  fi
+  return 0
+}
+
 dev_get() {
   echo "=== 设备档案 ==="
   DEV_ON=0
@@ -205,8 +226,10 @@ dev_get() {
   echo "DEV_APPLIED=$DEV_ON"
 }
 
-# 写入: 白名单 + 逐项校验。数值键只收纯数字, 标签键去空白/引号/反斜杠。
-# DEV_APPLY=0 时把数值一并清掉, 避免留着上一台机器的数据误导人。
+# 写入: 白名单 + 逐项校验。数值键只收纯数字, 标签键只收 [A-Za-z0-9_.-]。
+# 标签键的「空格 <-> 下划线」转换由界面负责(devToStore/devParse), 这里不替它猜:
+# device.conf 是多处脚本共读的纯 ASCII 键值文件, 存空格会让下游按空白切词读串。
+# DEV_APPLY=0 时把数值键整个删掉, 避免留着上一台机器的数据误导人。
 dev_set() {
   mkdir -p "$DEV_DIR" 2>/dev/null
   # 先按参数逐项校验, 全部通过才落盘, 避免半途中断留下半个配置
@@ -242,11 +265,16 @@ dev_set() {
   for KV in $DS_PEND; do
     atomic_update "$DEV_FILE" "${KV%%=*}" "${KV#*=}" || { echo "ERR write device.conf"; exit 1; }
   done
-  # 总闸关掉时, 顺手把数值键清空: 界面上就不会残留上一台机器的分辨率。
+  # 总闸关掉时, 把数值键整个删掉: 界面上就不会残留上一台机器的分辨率。
+  # 只有 device.conf 里还没有显示名时才回落 17 Pro —— 用户手填的名字不能被覆盖,
+  # 旧版无条件 atomic_update DEV_LABEL, 等于把用户填的名字一关总闸就抹掉。
   if [ "$DS_APPLY" = "0" ]; then
     atomic_update "$DEV_FILE" DEV_MODEL 17pro
-    atomic_update "$DEV_FILE" DEV_LABEL Xiaomi_17_Pro
     atomic_update "$DEV_FILE" DEV_STATUS stable
+    [ -n "$(dev_read DEV_LABEL)" ] || atomic_update "$DEV_FILE" DEV_LABEL Xiaomi_17_Pro
+    for DCK in DEV_SW DEV_SH DEV_D DEV_DPI DEV_PIN_X0 DEV_PIN_Y0 DEV_PIN_DX DEV_PIN_DY; do
+      dev_clear "$DCK"
+    done
   fi
   dev_get
 }
@@ -255,7 +283,7 @@ dev_set() {
 # 检测结果只回显, 由界面预填给用户确认后再保存 —— 不做「检测到就直接生效」。
 dev_detect() {
   echo "=== 自动检测 ==="
-  echo "DEV_DETECT=ok"
+  DSW=; DSH=; DDP=
   DSZ=$(wm size 2>/dev/null | grep -m1 'Override size')
   [ -z "$DSZ" ] && DSZ=$(wm size 2>/dev/null | grep -m1 'Physical size')
   if [ -n "$DSZ" ]; then
@@ -268,13 +296,28 @@ dev_detect() {
   [ -z "$DD" ] && DD=$(wm density 2>/dev/null | grep -m1 'Physical density')
   DDP=$(printf '%s' "$DD" | sed -n 's/.*[^0-9]\([0-9][0-9]*\).*/\1/p')
   [ -n "$DDP" ] && echo "DEV_DPI=$DDP"
-  # 显示 ID: 多数机型的 screencap -d 用 0; 探测不到就报 0, 由用户核对。
-  echo "DEV_D=0"
+  # 显示 ID: 多数机型的 screencap -d 用 0, 探测不到就报 0, 由用户核对。
+  # 只在真拿到尺寸时才报 —— 检测整体失败时若仍回 0, 会把用户手填的显示 ID 抹成 0。
+  [ -n "$DSW" ] && echo "DEV_D=0"
   # 锁屏键盘宫格无法自动可靠识别, 明确告知需要手动填。
   echo "DEV_PIN_HINT=manual"
   # 机型名尝试从 ro.product.model 取
   DMODEL=$(getprop ro.product.model 2>/dev/null | tr -d '\r\n' | sed 's/[^A-Za-z0-9_.-]/_/g')
   [ -n "$DMODEL" ] && echo "DEV_MODEL=$DMODEL"
+  # 显示名取 marketname(带空格的真名), 同样压成存储形态; 拿不到就退回机型名。
+  # 以前检测不回显示名, 界面就一直挂着 loadDevice 兜底的 'Xiaomi 17 Pro',
+  # 保存出来的档案里「机型 M2102K1C、显示名 17 Pro」自相矛盾。
+  DMARKET=$(getprop ro.product.marketname 2>/dev/null | tr -d '\r\n' | sed 's/[^A-Za-z0-9_.-]/_/g')
+  [ -z "$DMARKET" ] && DMARKET=$DMODEL
+  [ -n "$DMARKET" ] && echo "DEV_LABEL=$DMARKET"
+  # DEV_DETECT 必须排在最后、且只在真拿到东西时才 ok。
+  # 旧版在任何检测动作之前就无条件 echo DEV_DETECT=ok, wm size 拿不到值时
+  # 界面照样提示「已检测到本机参数」, 用户据此去保存就会踩空。
+  if [ -n "$DSW" ] || [ -n "$DSH" ] || [ -n "$DDP" ]; then
+    echo "DEV_DETECT=ok"
+  else
+    echo "DEV_DETECT=none"
+  fi
 }
 
 case "$1" in

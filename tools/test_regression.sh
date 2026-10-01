@@ -8,13 +8,16 @@
 #   所以这次改成把不变量直接写成断言: 不需要沙箱, 不需要预先录好的输出,
 #   任何时候 clone 下来都能跑, 再丢一次也无所谓。
 #
-# 六条守卫各挡一类真实发生过/差一点发生的事故:
+# 七条守卫各挡一类真实发生过/差一点发生的事故:
 #   1) water.sh 的 17 Pro 基线取值 —— 防「顺手改坐标/阈值」把唯一实测过的机型改挂
 #   2) service.sh 的单命中          —— 防同一天浇两次(重复触发是最恶劣的失败模式)
 #   3) app.js 的 DOM 引用           —— 防删元素后白屏(删 card.time 时真的会踩到)
 #   4) i18n 四语键集一致            —— 防只删/只加了一种语言的键
 #   5) water.sh 的截图生命周期      —— 防取证图重新开始永久残留
 #   6) 内容区 md5 的字节范围        —— 防「坐标没动但判定输入挪了位」(v0.12.8 踩过)
+#   7) 设备档案的形态转换          —— 防保存按钮再次「点了没反应」(v0.12.9 踩过)
+#      后端那段由 test_sandbox.sh 第 6 节覆盖, 这里只钉前端 —— 主故障在前端,
+#      而沙箱跑不到 app.js, 少了这条就还是「六条全绿、按钮是死的」。
 #
 # 用法: bash tools/test_regression.sh          (在仓库根目录)
 # 退出码: 0 = 全绿, 1 = 有守卫失败
@@ -432,6 +435,86 @@ finally:
 
 if bad == 0:
     print('  ok   5 个边界探针全部一致 = 内容区范围与 v0.10.0 逐字节相同')
+sys.exit(1 if bad else 0)
+PY
+
+
+# ============ 7. 设备档案的显示形态/存储形态 ============
+# 事故: v0.12.9 的「自动检测 → 保存」必然失败, 而当时六条守卫全绿。
+#   device.conf 的标签键只认 [A-Za-z0-9_.-], 于是约定「存下划线、显空格」:
+#   devParse 读回来把 _ 还原成空格, devSave 落盘前必须再转回下划线。
+#   旧版拿显示形态直接撞正则, 而 loadDevice() 兜底给的是 'Xiaomi 17 Pro'(带空格)
+#   —— 必然失败, 校验在发请求之前就 return, 后端一个字节都收不到。用户看到的是
+#   「点保存没反应」, 报错文案又不带字段名, 只能判定成「保存功能坏了」。
+#
+# 这条守卫只钉「先转换再校验」这个不变量, 不管具体写法:
+# 标签正则的实参只可能是转过的 model/label, 出现任何 .value 就是回归。
+sec "7. 设备档案的显示形态/存储形态转换"
+
+python3 - <<'PY' || FAILS=$((FAILS+1))
+import io, re, sys
+
+bad = 0
+src = io.open('webroot/app.js', encoding='utf-8').read()
+
+def cut(a, b, what):
+    i = src.find(a)
+    if i < 0:
+        print('  FAIL 找不到 %s 的起点 —— 结构变了, 本守卫需要跟着更新' % what)
+        return None
+    j = src.find(b, i)
+    if j < 0:
+        print('  FAIL 找不到 %s 的终点 —— 结构变了, 本守卫需要跟着更新' % what)
+        return None
+    return src[i:j]
+
+def check(cond, msg):
+    global bad
+    if cond:
+        print('  ok   %s' % msg)
+    else:
+        print('  FAIL %s' % msg)
+        bad += 1
+
+save = cut('async function devSave()', '// 设备卡事件挂载', 'devSave')
+pars = cut('function devParse', 'async function loadDevice', 'devParse')
+isfn = cut('function isErr(', '// ---------- 状态加载', 'isErr')
+if save is None or pars is None or isfn is None:
+    sys.exit(1)
+
+check('function devToStore(' in src, 'devToStore 函数存在')
+check(r"replace(/\s+/g, '_')" in src, 'devToStore 把空白转成下划线')
+
+check(re.search(r'const\s+model\s*=\s*devToStore\s*\(', save) is not None,
+      'devSave 的 model 先过 devToStore')
+check(re.search(r'const\s+label\s*=\s*devToStore\s*\(', save) is not None,
+      'devSave 的 label 先过 devToStore')
+
+# 标签正则只允许作用在转换后的变量上 —— 拿 .value 直接校验就是 v0.12.9 的原 bug
+MARK = '/^[A-Za-z0-9_.-]+$/.test('
+args = []
+i = 0
+while True:
+    k = save.find(MARK, i)
+    if k < 0:
+        break
+    j = save.find(')', k + len(MARK))
+    args.append(save[k + len(MARK):j])
+    i = k + 1
+check(len(args) == 2 and set(args) <= {'model', 'label'},
+      '标签正则只作用在转换后的变量上 (实参=%s)' % (args or '无'))
+
+check(re.search(r"d\[m\[1\]\]\s*=\s*\(m\[1\]\s*===\s*'DEV_LABEL'\)", pars) is not None,
+      'devParse 只把 DEV_LABEL 还原成空格 (不污染 DEV_MODEL)')
+
+check("args.push('DEV_LABEL=' + label)" in save, 'DEV_LABEL 发送的是转换后的 label')
+check("args.push('DEV_MODEL=' + model)" in save, 'DEV_MODEL 发送的是转换后的 model')
+
+check("s.indexOf('EXEC_ERR') === 0" in isfn,
+      'isErr 同时认 ERR 与 EXEC_ERR, 否则桥失败会弹「已保存」假成功')
+
+check("t('dev.bad.fields'" in save, '校验失败会带出字段名, 不再只说「参数不合法」')
+
 sys.exit(1 if bad else 0)
 PY
 

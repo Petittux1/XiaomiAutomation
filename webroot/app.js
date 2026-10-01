@@ -101,7 +101,13 @@ function toastMsg(m) { try { toast(m); } catch (e) {} }
 // webctl 的 ERR 文案保持技术原文(多语言下也不翻译), 这里只给它加一个本地化前缀,
 // 这样英文/法语/俄语用户也能看懂"是哪个操作失败了"。
 function errToast(raw) { toastMsg(t('toast.err', { err: raw })); }
-function isErr(r) { return String(r || '').indexOf('ERR') === 0; }
+// EXEC_ERR 是 run() 自己拼的前缀(桥没注入 / ksu.exec 抛异常), 它不以 ERR 开头。
+// 只判 'ERR' 会把这类失败当成成功, 落进 else 分支弹出「已保存」的假成功 ——
+// loadDevice/devDetect 单独判了 EXEC_ERR, 这里也必须认, 否则 16 处调用点全都在漏。
+function isErr(r) {
+  const s = String(r || '');
+  return s.indexOf('ERR') === 0 || s.indexOf('EXEC_ERR') === 0;
+}
 
 // ---------- 状态加载 ----------
 function chkRow(name, state, good) {
@@ -513,19 +519,26 @@ $('btnLog').addEventListener('click', loadLog);
 // 关键约定: 界面只把「检测结果预填给用户确认」, 绝不自动写配置。
 // DEV_APPLY 是总闸, 关着(=默认)时各脚本根本不读 DEV_*, 用的是 17 Pro 实测基线。
 let devDirty = false;
-let devLoaded = false;
 
 function devSet(id, v) { const e = $(id); if (e) e.value = (v == null ? '' : v); }
 
-// 从 device get 的 key=value 行里取值。DEV_LABEL 用 _ 表示空格, 这里还原。
+// 从 device get 的 key=value 行里取值。
+// 只有 DEV_LABEL 需要把存储形态(下划线)还原成显示形态(空格)。
+// 以前对所有键都做 _→空格, 会把 DEV_MODEL/DEV_STATUS 这类短标识也改写掉:
+// 自动检测给的机型名是把非法字符换成 _ 得来的, 还原成空格后反而过不了保存校验。
 function devParse(out) {
   const d = {};
   for (const line of String(out || '').split('\n')) {
     const m = line.match(/^(DEV_[A-Z_]+)=(.*)$/);
-    if (m) d[m[1]] = m[2].replace(/_/g, ' ');
+    if (m) d[m[1]] = (m[1] === 'DEV_LABEL') ? m[2].replace(/_/g, ' ') : m[2];
   }
   return d;
 }
+
+// 显示形态(空格) -> 存储形态(下划线)。device.conf 的标签键只认 [A-Za-z0-9_.-],
+// 于是约定「存下划线、显空格」: 输入框允许用户写 'Xiaomi 11' 这种带空格的名字,
+// 落盘前转成 Xiaomi_11, 读回来由 devParse 再转回空格显示。
+function devToStore(s) { return String(s == null ? '' : s).trim().replace(/\s+/g, '_'); }
 
 async function loadDevice() {
   const out = await run('device get');
@@ -545,7 +558,6 @@ async function loadDevice() {
   devSet('devPDX',     d.DEV_PIN_DX || '320');
   devSet('devPDY',     d.DEV_PIN_DY || '210');
   devRenderBadge(d);
-  devLoaded = true;
 }
 
 // 徽标: 17 Pro 标「稳定」, 其余一律标「测试中」—— 不因为检测成功就改口。
@@ -569,6 +581,9 @@ function devRenderBadge(d) {
   }
   b.textContent = txt;
   b.className = cls;
+  // 「稳定 / 测试中」是「这个机型有没有被验证过」的静态标签, 不是运行状态,
+  // 也不参与 devSave() 的任何判定 —— 但它黄色的样子很像卡住, 所以把含义显式写出来。
+  b.title = (applyOn && !isPro) ? t('dev.testing.hint') : t('dev.stable.hint');
 }
 
 function devMarkDirty() {
@@ -581,11 +596,15 @@ async function devDetect() {
   busy = true;
   const out = await run('device detect');
   busy = false;
-  if (out.indexOf('EXEC_ERR') === 0 || out.indexOf('DEV_DETECT=ok') === -1) {
-    toastMsg(t('dev.detect.fail')); return;
-  }
+  // 桥没注入要说桥的事, 检测不到才说「手动填写」—— 旧版两句合成一句,
+  // ksu.exec 抛异常时用户看到的是「未检测到本机参数」, 完全查不到真正原因。
+  if (out.indexOf('EXEC_ERR') === 0) { errToast(out); return; }
+  if (out.indexOf('DEV_DETECT=ok') === -1) { toastMsg(t('dev.detect.nothing')); return; }
   const d = devParse(out);
   if (d.DEV_MODEL) devSet('devModel', d.DEV_MODEL);
+  // 显示名也一起回填: 以前不填, 档案里就会留下 loadDevice 兜底的 'Xiaomi 17 Pro',
+  // 于是机型是 M2102K1C 而显示名写着 17 Pro —— 保存下来一份自相矛盾的档案。
+  if (d.DEV_LABEL) devSet('devLabel', d.DEV_LABEL);
   if (d.DEV_SW)    devSet('devSW', d.DEV_SW);
   if (d.DEV_SH)    devSet('devSH', d.DEV_SH);
   if (d.DEV_DPI)   devSet('devDPI', d.DEV_DPI);
@@ -611,11 +630,17 @@ async function devSave() {
     if (!/^\d+$/.test(v)) { bad.push(t(key)); continue; }
     if (parseInt(v, 10) < min) { bad.push(t(key)); }
   }
-  if (bad.length) { toastMsg(t('dev.detect.fail')); return; }
-  const model = ($('devModel').value || '').trim();
-  const label = ($('devLabel').value || '').trim();
-  if (model && !/^[A-Za-z0-9_.-]+$/.test(model)) { toastMsg(t('dev.detect.fail')); return; }
-  if (label && !/^[A-Za-z0-9_.-]+$/.test(label)) { toastMsg(t('dev.detect.fail')); return; }
+  // 标签键必须先转成存储形态再校验、再发送。
+  // v0.12.9 及以前拿显示形态去撞 /^[A-Za-z0-9_.-]+$/, 而 loadDevice() 兜底给的
+  // 是 'Xiaomi 17 Pro'(带空格) —— 必然失败, 校验在发请求之前就 return 了,
+  // 后端一个字节都收不到, 用户看到的现象正是「点保存没反应」。
+  const model = devToStore($('devModel') ? $('devModel').value : '');
+  const label = devToStore($('devLabel') ? $('devLabel').value : '');
+  if (model && !/^[A-Za-z0-9_.-]+$/.test(model)) bad.push(t('dev.model'));
+  if (label && !/^[A-Za-z0-9_.-]+$/.test(label)) bad.push(t('dev.label'));
+  // bad 以前只 push 从没读过, 报错又只说「参数不合法」—— 数字明明全对却查不出是哪个
+  // 字段, 用户只能判定成「保存功能坏了」。现在把字段名带出来。
+  if (bad.length) { toastMsg(t('dev.bad.fields', { f: bad.join(', ') })); return; }
 
   const applyOn = $('devApply').checked;
   const isPro = (model === '17pro');
