@@ -28,6 +28,7 @@ Il fonctionne par **contrôle root direct** (`screencap` / `getevent` / `sendeve
 - **WebUI multilingue** : chinois / English / Français / Русский, sélectionnable en haut à droite ; le choix est mémorisé.
 - **Prise en charge de plusieurs appareils** : une couche de profil d'appareil permet d'ajuster par modèle la taille de l'écran, l'ID d'affichage, la disposition du pavé numérique de l'écran de verrouillage et la grille du motif, afin que l'enregistrement, la relecture et le déverrouillage PIN / motif fonctionnent aussi sur d'autres téléphones HyperOS 4. La base mesurée du Xiaomi 17 Pro est conservée telle quelle et n'est pas affectée.
 - **Le WebUI se met à jour avec le module** : les ressources portent une version, la mise en cache est désactivée, et la page vérifie d'elle-même si le document est périmé puis le recharge — plus besoin de désinstaller puis réinstaller après une mise à jour.
+- **Bandeau « mise à jour en attente »** : juste après le flash et avant le redémarrage, le badge indique déjà la nouvelle version alors que le code exécuté est encore l'ancien — un bandeau en haut du WebUI le dit explicitement et disparaît une fois le redémarrage effectué.
 - **Une interface plus aérée** : un résumé d'état en haut, tout le détail rangé dans des sections repliables, pour que le premier écran ne soit plus un mur de formulaire ; tout déplier / tout replier en un geste.
 - Le code PIN n'est écrit que dans la configuration locale et n'apparaît jamais dans l'état, le journal ni le code source.
 
@@ -68,7 +69,7 @@ La liste complète des sous-commandes figure en en-tête du fichier : `webctl.sh
 
 ## Installation
 
-1. Téléchargez `XiaomiAutomation-v0.13.1.zip` depuis les Releases.
+1. Téléchargez `XiaomiAutomation-v0.13.2.zip` depuis les Releases.
 2. Flashez ce zip dans KernelSU / Magisk.
 3. Redémarrez, ouvrez le WebUI du module et réglez la méthode de déverrouillage et le code PIN selon vos besoins.
 4. Pour une tâche enregistrée, renseignez le nom de package de l'application cible ; basculez vers cette application et appuyez sur « Démarrer l'enregistrement », puis sur « Arrêter l'enregistrement » lorsque vous avez terminé.
@@ -85,7 +86,7 @@ id=icbc_daily_water
 
 Ne supprimez pas ces répertoires et ne modifiez pas l'identifiant du module ; votre configuration, vos profils, votre code PIN et vos actions enregistrées sont conservés.
 
-> Si le WebUI semble encore obsolète après la mise à jour, vérifiez la version en haut à droite : elle doit indiquer `v0.13.1`. Sinon, l'ancien paquet a été installé.
+> Flasher ne suffit pas : il faut **redémarrer pour activer**. Le nouveau paquet atterrit dans `modules_update` et n'est fusionné dans `modules` qu'au démarrage. En attendant, le badge de version affiche déjà la nouvelle version alors que l'ancien code tourne encore — le WebUI affiche donc un bandeau jaune « La nouvelle version vX est prête : redémarrer pour l'activer », et sa disparition prouve que le nouveau code tourne (le journal de démarrage note aussi `UPDATE pending=vX reboot=needed`).
 
 ## Utilisation
 
@@ -129,6 +130,8 @@ Deux cas particuliers à connaître :
 Avant une tâche, le module tente de réveiller et de déverrouiller l'écran, soit par saisie aveugle du code PIN, soit en rejouant votre motif, soit par balayage vers le haut. Il maintient l'écran allumé pendant l'exécution puis restaure le verrouillage d'orientation, `screen_off_timeout` et le maintien d'éveil d'origine. Si l'état de verrouillage ne peut pas être confirmé, il abandonne en toute sécurité au lieu d'injecter des coordonnées à l'aveugle.
 
 **Déverrouillage par motif** : choisissez « Motif » comme méthode, puis dessinez 4 à 9 points distincts sur le pavé à neuf points du WebUI (glissez pour les relier ; le « point intermédiaire » qu'Android accepte est complété automatiquement) et enregistrez. Le motif reste dans la configuration locale — l'interface n'affiche jamais que « défini », jamais l'ordre des points. Le pavé utilise par défaut des coordonnées mesurées sur le Xiaomi 17 Pro (son écran de verrouillage 1220×2656) ; sur un autre téléphone, ajustez `PAT_X0` / `PAT_Y0` (premier point, en haut à gauche) et `PAT_DX` / `PAT_DY` (espacement) dans la carte « 📱 Profil d'appareil », puis appuyez sur le bouton d'essai « verrouillage → déverrouillage » : un succès affiche `UNLOCK_OK`, sinon corrigez les quatre valeurs et réessayez. Sans motif, le module revient au PIN ou au balayage.
+
+**Ce que veut dire l'essai quand il s'arrête** : l'essai « verrouillage → déverrouillage » a maintenant deux verrous — l'écran de verrouillage doit réellement apparaître, et un simple glissement ne doit pas déverrouiller, avant tout tracé de coordonnées. Si l'écran n'apparaît jamais (l'écran n'était pas verrouillé) : « Test interrompu : l'écran de verrouillage n'est jamais apparu » ; si un simple glissement va jusqu'à l'écran d'accueil (aucun motif/PIN n'était demandé) : « Test interrompu : un simple glissement va jusqu'à l'écran d'accueil ». Les deux renvoient `UNLOCK_SKIP` (`nolock` / `nocred`) au lieu de `UNLOCK_OK` — sans ces verrous, un tracé décalé passait quand même pour réussi et faussait la calibration.
 
 ### Langue
 
@@ -190,7 +193,7 @@ bash tools/build_zip.sh
 Le script écrit le fichier suivant dans le répertoire parent :
 
 ```text
-XiaomiAutomation-v0.13.1.zip
+XiaomiAutomation-v0.13.2.zip
 ```
 
 ## Licence

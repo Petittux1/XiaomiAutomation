@@ -17,6 +17,22 @@ cleanup_cfg_tmp() { rm -f "$CFG".tmp.* "$CFG".pin.* 2>/dev/null; }
 trap 'cleanup_cfg_tmp' 0
 trap 'cleanup_cfg_tmp; exit 143' 1 2 15
 
+# 已刷进 modules_update、要等重启才合并到 modules 的新版本 (返回版本号, 没有则空)。
+# 界面上的版本号读的是 module.prop —— KSU 刷完会先把它改成新版本, 所以"显示新版
+# 却跑旧行为"时, 真正的线索是这个目录: 新包还躺在 modules_update 里等合并。
+pending_new_ver() {
+  # 落点从 $M 推: modules_update 是 modules 的同级目录。写成推导式而不是绝对路径,
+  # 是为了让沙箱改写 $M 之后这条探测照样能被测到。
+  PNM=$M/../../modules_update/icbc_daily_water/module.prop
+  [ -f "$PNM" ] || return 0
+  # 临时量用 PNU/PMU: PC 在两个脚本里都被别的逻辑复用, 不跟它抢。
+  PNU=$(grep -m1 '^versionCode=' "$PNM" 2>/dev/null | cut -d= -f2)
+  PMU=$(grep -m1 '^versionCode=' "$M/module.prop" 2>/dev/null | cut -d= -f2)
+  case "$PNU:$PMU" in *[!0-9:]*|:*) return 0;; esac
+  [ -n "$PNU" ] && [ -n "$PMU" ] && [ "$PNU" -gt "$PMU" ] || return 0
+  grep -m1 '^version=' "$PNM" 2>/dev/null | cut -d= -f2
+}
+
 atomic_update() {  # FILE KEY VALUE; shell-only rewrite, same-directory mv
   AU_FILE=$1; AU_KEY=$2; AU_VAL=$3
   AU_TMP=$AU_FILE.tmp.$$
@@ -371,6 +387,9 @@ case "$1" in
     SVC=stopped
     pgrep -f "$M/service.sh" >/dev/null 2>&1 && SVC=running
     echo "service: $SVC"
+    # 有新包在 modules_update 等重启就直说, 免得界面显示新版本、跑的却是旧代码
+    PU=$(pending_new_ver)
+    if [ -n "$PU" ]; then echo "update: $PU"; else echo "update: none"; fi
     T=$(date +%Y%m%d)
     # DONE 看内置 icbc profile (脚本型工行浇水); FORCE 不写 => 可反复测试永不污染
     IDONE=no
@@ -712,6 +731,9 @@ case "$1" in
       rm -f $M/unlock.out $M/unlock.txt 2>/dev/null
       case "$URES" in
         UNLOCK_OK*) echo "UNLOCK_OK";;
+        # 测试没跑完就中止了(锁没上/锁屏不要求凭据) —— 这不是"解不开", 是"没得测",
+        # 单独给个码, 界面按 i18n 显示原因, 别混进 failed 让人以为坐标还是错的。
+        UNLOCK_SKIP*) echo "ERR unlock_skipped: ${URES#UNLOCK_SKIP }";;
         *) echo "ERR unlock failed (${URES:-no result})";;
       esac
     else

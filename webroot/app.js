@@ -178,11 +178,17 @@ async function loadStatus() {
     if (line.indexOf('today: ') === 0) cfg._today = line.slice(7);
     if (line.indexOf('service: ') === 0) cfg._svc = line.slice(9);
     if (line.indexOf('fail_times: ') === 0) cfg._fail = line.slice(12);
+    if (line.indexOf('update: ') === 0) cfg._upd = line.slice(8);
   }
   // 今日状态
   const td = $('today');
   if (cfg._today === 'DONE') { td.textContent = t('st.todayDone'); td.className = 'pill ok'; }
   else { td.textContent = t('st.todayPending'); td.className = 'pill warn'; }
+  // 新包已就位、等重启合并 —— 这时版本角标已经是新版本了, 不说一句就会以为升级
+  // 已经生效, 然后对着旧代码调半天参数(v0.13.1 图案坐标就是这么白折腾的)。
+  const ub = $('upd');
+  if (cfg._upd && cfg._upd !== 'none') { ub.hidden = false; ub.textContent = t('ui.updatePending', { neu: cfg._upd }); }
+  else { ub.hidden = true; }
   // 时间与开关: 只灌给模块级变量, 不再写 DOM(见文件头 gloSched/gloEn 的说明)
   gloSched = cfg.SCHED_TIME || '0730';
   gloEn = cfg.SCHED_ENABLE === '1';
@@ -492,6 +498,16 @@ async function testUnlock() {
   const r = await run('unlock');
   busy = false;
   if (r.indexOf('UNLOCK_OK') === 0) { toastMsg(t('toast.unlockOk')); return; }
+  // 没跑完就中止(锁没上/锁屏不要求凭据) —— 不是解不开, 是没得测, 给出人话原因。
+  // 两个码写成字面量分支, 不做「前缀 + 变量」的动态取键: 回归守卫只认字面量引用,
+  // 拼出来的半截键会被当成幽灵键(与 day.1..day.7 同一条规矩)。
+  const sk = /^ERR unlock_skipped:\s*(\w+)/.exec(r || '');
+  if (sk) {
+    if (sk[1] === 'nolock') { errToast(t('unlock.skip.nolock')); return; }
+    if (sk[1] === 'nocred') { errToast(t('unlock.skip.nocred')); return; }
+    errToast(r);
+    return;
+  }
   errToast(r || 'no result');
 }
 

@@ -461,6 +461,51 @@ else
 fi
 
 
+# ============ 12. 新版本待重启生效的探测 ============
+sec "12. status 能报出「有新版本待重启」"
+
+# 这条链路就是 v0.13.1 白折腾一轮的元凶: 刷完没重启, module.prop 已经是新版本
+# (右上角显示新版), 新包却还躺在 modules_update 里等合并 —— 当时界面一声不吭,
+# 于是对着旧 service.sh 调了半天图案坐标。
+# 沙箱把 M 改写成了 $SB/..., pending_new_ver 从 $M 推导落点, 所以测得到。
+UPD=$SB/modules_update/icbc_daily_water
+mkdir -p "$UPD"
+printf 'id=icbc_daily_water\nversion=v0.13.1\nversionCode=1141\n' > "$M/module.prop"
+rm -f "$UPD/module.prop"
+
+OUT=$($CTL status 2>&1); RC=$?
+case "$OUT" in
+  *"update: none"*) ok "没有待重启版本时报 update: none (rc=$RC)" ;;
+  *) fail "没有待重启版本时没报 update: none" ;;
+esac
+
+printf 'id=icbc_daily_water\nversion=v9.9.9\nversionCode=9999\n' > "$UPD/module.prop"
+OUT=$($CTL status 2>&1)
+case "$OUT" in
+  *"update: v9.9.9"*) ok "modules_update 有更高版本时报出 v9.9.9" ;;
+  *) fail "没报出待重启版本: $(printf '%s' "$OUT" | grep '^update:' || echo '(无 update 行)')" ;;
+esac
+
+# 已经手动合并过(两个目录版本一致)就不能再报, 否则横幅会永远挂着
+printf 'id=icbc_daily_water\nversion=v0.13.1\nversionCode=1141\n' > "$UPD/module.prop"
+OUT=$($CTL status 2>&1)
+case "$OUT" in
+  *"update: none"*) ok "版本一致(已合并)时不再报待重启" ;;
+  *) fail "版本一致仍报待重启: $(printf '%s' "$OUT" | grep '^update:')" ;;
+esac
+
+# versionCode 缺失/带脏字符时必须安静返回, 不能拿空串做 -gt 把 status 整个炸掉
+printf 'id=icbc_daily_water\nversion=v9.9.9\n' > "$UPD/module.prop"
+OUT=$($CTL status 2>&1); RC=$?
+[ "$RC" = "0" ] && ok "缺 versionCode 时 status 照常返回 (rc=0)" \
+               || fail "缺 versionCode 时 status 炸了 rc=$RC"
+case "$OUT" in
+  *"update: none"*) ok "缺 versionCode 时按「无待重启」处理" ;;
+  *) fail "缺 versionCode 时报了待重启: $(printf '%s' "$OUT" | grep '^update:')" ;;
+esac
+rm -rf "$UPD"
+
+
 # ============ 汇总 ============
 printf '\n'
 if [ "$FAILS" = "0" ]; then

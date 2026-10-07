@@ -28,6 +28,7 @@ It works by **direct root control** (`screencap` / `getevent` / `sendevent`) —
 - **Multilingual WebUI**: Chinese / English / Français / Русский, switchable from the top right; the choice is remembered.
 - **Multi-device support**: a device-profile layer can adjust screen size, display ID, the lock-screen keypad geometry and the pattern grid per model, so recording, replay and PIN / pattern auto-unlock also work on other HyperOS 4 phones. The Xiaomi 17 Pro measured baseline is kept exactly as it is and is not affected.
 - **WebUI updates with the module**: assets carry a version tag, caching is disabled, and the page self-checks whether the document is stale and reloads it — no more uninstalling and reinstalling after an update.
+- **Pending-update banner**: right after you flash a new zip and before rebooting, the badge already reads the new version while the code that runs is still the old one — a banner at the top of the WebUI says so explicitly and disappears once the reboot has merged the update.
 - **A calmer interface**: a status summary at the top, everything else tucked into collapsible sections so the first screen is no longer one wall of form; expand / collapse everything in one tap.
 - The PIN is written only to the on-device config and never appears in the status output, the log or the source.
 
@@ -68,7 +69,7 @@ The full subcommand list is in the file header: `webctl.sh status|setpin|setpatt
 
 ## Installation
 
-1. Download `XiaomiAutomation-v0.13.1.zip` from Releases.
+1. Download `XiaomiAutomation-v0.13.2.zip` from Releases.
 2. Flash that zip in KernelSU / Magisk.
 3. Reboot, open the module WebUI and set the unlock method and PIN as needed.
 4. For a recorded task, fill in the target app package name; switch to that app and press "Start recording", then press "Stop recording" when you are done.
@@ -85,7 +86,7 @@ id=icbc_daily_water
 
 Do not delete these directories or change the module ID; your configuration, profiles, PIN and recorded actions are carried over.
 
-> If the WebUI still looks stale after upgrading, check the version in the top right — it must read `v0.13.1`. If it does not, the old package was installed.
+> Flashing alone is not enough: **reboot to activate**. The new package lands in `modules_update` and is merged into `modules` only at boot. In the meantime the version badge already shows the new release while the old code is still running — so the WebUI shows a yellow banner "New version vX is staged — reboot to activate it", and the banner disappearing is the sign that the new code is actually running (the boot log also records `UPDATE pending=vX reboot=needed`).
 
 ## Usage
 
@@ -129,6 +130,8 @@ Two exceptions to keep in mind:
 Before a task the module tries to wake and unlock the screen, either by blind PIN entry, by replaying your pattern, or by swiping up. It keeps the screen awake while running and restores the original rotation lock, `screen_off_timeout` and stay-awake setting afterwards. If the lock state cannot be confirmed it aborts safely instead of injecting blind coordinates.
 
 **Pattern unlock**: choose "Pattern" as the unlock method, then tap out 4–9 distinct dots on the nine-dot pad in the WebUI (drag to connect them; the "middle dot" Android accepts is filled in automatically) and save. The pattern stays in the on-device config — the interface only ever echoes "set", never the dot order. The pad defaults to coordinates measured on the Xiaomi 17 Pro (its 1220×2656 lock screen); on another phone tune `PAT_X0` / `PAT_Y0` (top-left dot) and `PAT_DX` / `PAT_DY` (spacing) in the "📱 Device profile" card, then press the "lock → unlock test" button: success prints `UNLOCK_OK`, and a miss means nudge the four values and try again. With no pattern set the module falls back to PIN or swipe.
+
+**What the unlock test means when it stops**: the "lock → unlock test" now has two gates — the lock screen must actually appear, and a single swipe must not unlock the phone, before any coordinates are drawn. If the lock screen never appears (the screen was not locked) you get "Test aborted: the lock screen never appeared"; if a single swipe goes straight to the home screen (no pattern/PIN was required) you get "Test aborted: a single swipe went straight to the home screen". Both report `UNLOCK_SKIP` (`nolock` / `nocred`) instead of `UNLOCK_OK` — without those gates a miscalibrated draw still reported success, which sent calibration in the wrong direction.
 
 ### Language
 
@@ -190,7 +193,7 @@ bash tools/build_zip.sh
 The script writes the following file into the parent directory:
 
 ```text
-XiaomiAutomation-v0.13.1.zip
+XiaomiAutomation-v0.13.2.zip
 ```
 
 ## License

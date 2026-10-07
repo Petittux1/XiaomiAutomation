@@ -570,6 +570,86 @@ else
 fi
 
 
+# ============ 9. 测试解锁的防假阳性 + 新版本待重启提示 ============
+sec "9. 测试解锁不许假通过, 新版本待重启要提示"
+
+# v0.13.1 真机踩过两个坑, 这节把它们钉死:
+#  ① 测试解锁在「锁没真正锁上」时照样回 OK(上滑兜底直接进桌面), 于是画偏了也报成功;
+#  ② 刷完没重启时 module.prop 已是新版本、跑的却是旧代码, 界面不吭声, 用户对着旧
+#     代码调参数(图案坐标就是这么白折腾一轮的)。
+if grep -q 'UNLOCK_SKIP nolock' service.sh && grep -q 'UNLOCK_SKIP nocred' service.sh; then
+  ok "service.sh 两道闸都产出 UNLOCK_SKIP 码"
+else
+  fail "service.sh 缺 UNLOCK_SKIP nolock/nocred, 测试解锁仍会假通过"
+fi
+
+# 两道闸必须排在 unlock_screen 之前, 否则先画完再判定就来不及了
+GN=$(grep -n 'UNLOCK_SKIP nolock' service.sh | head -1 | cut -d: -f1)
+GC=$(grep -n 'UNLOCK_SKIP nocred' service.sh | head -1 | cut -d: -f1)
+GU=$(grep -n 'unlock_screen; UU=' service.sh | head -1 | cut -d: -f1)
+if [ -n "$GN" ] && [ -n "$GC" ] && [ -n "$GU" ] && [ "$GN" -lt "$GU" ] && [ "$GC" -lt "$GU" ]; then
+  ok "闸 1($GN)/闸 2($GC) 都在 unlock_screen($GU) 之前"
+else
+  fail "闸的顺序不对: nolock=$GN nocred=$GC unlock_screen=$GU"
+fi
+
+# 闸 2 依赖「上滑一次不会把图案锁解开」, 真机已验证(连滑两次 lock_state 仍是 1);
+# 这里只防退化: 闸里判的是「滑完还锁着」才继续, 解开了就报 nocred。
+if grep -A6 'sweep_up$' service.sh | grep -q 'UNLOCK_SKIP nocred'; then
+  ok "闸 2 在上滑之后判 nocred"
+else
+  fail "闸 2 不在上滑之后, 判不出「锁屏没要求凭据」"
+fi
+
+if grep -q 'ERR unlock_skipped:' webctl.sh; then
+  ok "webctl 把 SKIP 码透传成 ERR unlock_skipped:"
+else
+  fail "webctl 没有 unlock_skipped 分支, 界面只能看到 failed"
+fi
+
+if grep -q "t('unlock.skip.nolock')" webroot/app.js && grep -q "t('unlock.skip.nocred')" webroot/app.js; then
+  ok "app.js 用字面量取两个 SKIP 文案(守卫认字面量)"
+else
+  fail "app.js 没有以字面量引用 unlock.skip.* , 文案会变孤儿键"
+fi
+
+for k in 'unlock.skip.nolock' 'unlock.skip.nocred' 'ui.updatePending'; do
+  n=$(grep -c "'$k':" webroot/i18n.js || true)
+  if [ "$n" = "4" ]; then ok "i18n 四语都有 $k"; else fail "$k 在 i18n 里只有 $n 语 (要 4)"; fi
+done
+
+if grep -q 'pending_new_ver()' service.sh && grep -q 'pending_new_ver()' webctl.sh; then
+  ok "service/webctl 都探测 modules_update 里的待重启版本"
+else
+  fail "缺 pending_new_ver, 刷完没重启时界面不会吭声"
+fi
+
+if grep -q 'reboot=needed' service.sh; then
+  ok "启动日志会留 UPDATE pending=... reboot=needed"
+else
+  fail "启动日志没有 UPDATE 行, 排查新旧版本混跑时少一条线索"
+fi
+
+if grep -q 'update: ' webctl.sh && grep -q "line.indexOf('update: ')" webroot/app.js; then
+  ok "status 吐 update: 行, app.js 认得它"
+else
+  fail "status 与 app.js 的 update: 行没对上"
+fi
+
+if grep -q 'id="upd"' webroot/index.html && grep -q "\$('upd')" webroot/app.js && grep -q "t('ui.updatePending'" webroot/app.js; then
+  ok "横幅元素在 index.html, 且由 ui.updatePending 文案驱动"
+else
+  fail "待重启横幅缺元素/缺取文案的代码"
+fi
+
+# 横幅默认必须是隐藏的, 否则每次打开界面都挂着一条"有新版本"
+if grep -q 'id="upd"[^>]*hidden' webroot/index.html; then
+  ok "横幅默认 hidden"
+else
+  fail "横幅默认没有 hidden, 没有新版本时也会显示"
+fi
+
+
 # ============ 汇总 ============
 printf '\n'
 if [ "$FAILS" = "0" ]; then

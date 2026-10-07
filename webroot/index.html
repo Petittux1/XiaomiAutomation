@@ -176,6 +176,16 @@
   .pill.warn { color: var(--warn); border-color: #6b4a12; }
   .rec-on { color: #f87171; font-weight: 700; }
 
+  /* ---------- 新版本待重启生效的提示 ----------
+     KSU 刷完会先把 module.prop 改成新版本(所以右上角已经显示新版), 但新包要等重启
+     才从 modules_update 合并到 modules —— 不明说就是"显示新版、跑旧行为"(v0.13.1 踩过)。 */
+  .updwarn {
+    max-width: 560px; margin: 0 auto 12px; padding: 9px 12px;
+    border: 1px solid #6b4a12; border-radius: 10px;
+    background: #1c160c; color: var(--warn); font-size: 12.5px; line-height: 1.5;
+  }
+  .updwarn[hidden] { display: none; }
+
   /* ---------- 每周执行日 ---------- */
   .daysrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: var(--gap); }
   .daysrow .dl { font-size: 11px; color: var(--mut); flex: none; }
@@ -223,6 +233,10 @@
   <span id="ver">v0.12.0</span>
   <select id="lang" data-i18n-title="lbl.lang" title="语言"></select>
 </header>
+
+<!-- 只在"有新包已就位、等重启合并"时出现: 版本角标那时已经是新版本了, 不提示就会
+     误以为升级失败/新功能没生效。平时 hidden, 不占位置。 -->
+<div id="upd" class="updwarn" hidden></div>
 
 <!-- 概览: 状态一眼可见, 常用操作集中在这里; 细节全部收进下面的折叠分组 -->
 <div class="hero">

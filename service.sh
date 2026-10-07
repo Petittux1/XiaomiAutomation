@@ -101,8 +101,27 @@ for p in $(pgrep -f "$M/service.sh" 2>/dev/null); do
 done
 sleep 1
 
+# 已刷进 modules_update、但要等重启才合并到 modules 的新版本 (返回其版本号, 没有则空)。
+# 这个坑 v0.13.1 真机踩过: 刷完没重启, KSU 已经把 module.prop 先改成新版本, 界面显示
+# 新版本, 跑的却是旧 service.sh —— 图案坐标用的还是旧默认值, 怎么调都不对。
+pending_new_ver() {
+  # 落点从 $M 推: modules_update 是 modules 的同级目录。写成推导式而不是绝对路径,
+  # 是为了让沙箱改写 $M 之后这条探测照样能被测到。
+  PNM=$M/../../modules_update/icbc_daily_water/module.prop
+  [ -f "$PNM" ] || return 0
+  # 临时量用 PNU/PMU: PC 在两个脚本里都被别的逻辑复用, 不跟它抢。
+  PNU=$(grep -m1 '^versionCode=' "$PNM" 2>/dev/null | cut -d= -f2)
+  PMU=$(grep -m1 '^versionCode=' "$M/module.prop" 2>/dev/null | cut -d= -f2)
+  case "$PNU:$PMU" in *[!0-9:]*|:*) return 0;; esac
+  [ -n "$PNU" ] && [ -n "$PMU" ] && [ "$PNU" -gt "$PMU" ] || return 0
+  grep -m1 '^version=' "$PNM" 2>/dev/null | cut -d= -f2
+}
+
 VER=$(grep -m1 '^version=' $M/module.prop 2>/dev/null | cut -d= -f2)
 echo $(date +%m%d-%H%M) SD_BOOT M8 $VER SCHED=$SCHED_TIME DAYS=$SCHED_DAYS EN=$SCHED_ENABLE WATCH=$WATCH_OPEN UNLOCK=$UNLOCK_MODE >> $LOG
+# 有新包等着重启就留个痕, 排查"明明升了级怎么还是旧行为"时第一眼能看到
+NEWV=$(pending_new_ver)
+[ -n "$NEWV" ] && echo $(date +%m%d-%H%M) UPDATE pending=$NEWV active=$VER reboot=needed >> $LOG
 
 # ---------- 设备发现 (getevent 单遍扫描 + boot_id 缓存) ----------
 discdev() {
@@ -847,6 +866,27 @@ while true; do
       sleep 1.5
     fi
     wake_screen; UW=$?
+    # 闸 1: 锁屏必须真的出现。锁没上就往下走的话, 兜底上滑会直接进桌面 ——
+    # 测出来的只是"没锁的屏幕能进桌面", 对校准宫格毫无意义, 却会回一句 OK 骗人。
+    # (v0.13.1 之前就是这么假通过的: 画偏了也照样 OK。)
+    LS=$(lock_state); UN=0
+    while [ "$LS" != "1" ] && [ $UN -lt 4 ]; do sleep 0.5; LS=$(lock_state); UN=$((UN+1)); done
+    if [ "$UW" -ne 0 ] || [ "$LS" != "1" ]; then
+      echo $(date +%m%d-%H%M) UNTEST SKIP no-lock W=$UW LS=$LS >> $LOG
+      echo "UNLOCK_SKIP nolock" > $M/unlock.out
+      continue
+    fi
+    # 闸 2: 单独先上滑一次, 滑完还得锁着。滑一下就开 = 锁屏压根没要求凭据
+    # (纯滑动锁, 或自动锁定还没生效), 此时画什么都不可能测出坐标对错, 同样报 SKIP。
+    # 真机验证过: 有图案锁时连滑两次也不会开, 且图案界面不会被收回去。
+    sweep_up
+    sleep 1.5
+    LS=$(lock_state)
+    if [ "$LS" = "0" ]; then
+      echo $(date +%m%d-%H%M) UNTEST SKIP no-credential >> $LOG
+      echo "UNLOCK_SKIP nocred" > $M/unlock.out
+      continue
+    fi
     unlock_screen; UU=$?
     if [ $UW -eq 0 ] && [ $UU -eq 0 ]; then
       echo $(date +%m%d-%H%M) UNTEST OK W=$UW U=$UU >> $LOG
