@@ -6,6 +6,9 @@
 #       之后**只在目标 app 停留期间**录取: 切走/回桌面自动暂停, 回到目标 app 继续,
 #       锁屏/暗屏自动暂停, 解锁继续; 「停止」收尾存档。
 #       P_PKG 为空 = 亮屏即开录全量录入 (适合先测坐标/无固定 app 的操作)。
+#       录制方式见 profile conf 的 P_SCOPE:
+#         空/pkg = 指定包名录取 (上面那条绑定规则, 核心路径)
+#         all    = 全场录取     (不绑定包名, 不因切 app 暂停, 系统手势区也照录)
 #       PROFILE 为 profiles/ 下目录名(ASCII slug), 显示名在 conf P_NAME。
 M=/data/adb/modules/icbc_daily_water
 BASE=/data/adb/icbc_water
@@ -309,8 +312,9 @@ put_gesture() {
     if [ $APPAWARE -eq 1 ]; then
       # app 绑定: 位置不限(含左/右边缘返回与底部上滑返回), 由上方完成时前台复查裁决
       echo "W$MS sw@$DUR $SX $SY $PTS $X $Y" >> $TMP
-    elif ! zone_sw $SX $SY; then
-      # 裸录只录普通区域滑动; zone_sw 返回 1 代表系统手势区
+    elif [ "${ZONEFILT:-1}" = "1" ] && ! zone_sw $SX $SY; then
+      # 指定包名之外的裸录只录普通区域滑动; zone_sw 返回 1 代表系统手势区。
+      # 全场录取 (ZONEFILT=0) 走不到这里 —— 边缘返回/回桌面手势必须留住。
       log "ZONE_SKIP 系统手势区 sw 起点 $SX,$SY"
     else
       echo "W$MS sw@$DUR $SX $SY $PTS $X $Y" >> $TMP
@@ -366,16 +370,24 @@ _daemon() {
   echo $$ > $PIDF
   echo "$N" > $NAME
   CDIR=$PFX/$N
-  P_TYPE=script; P_PKG=; P_NAME=
+  P_TYPE=script; P_PKG=; P_NAME=; P_SCOPE=
   [ -f $CDIR/conf ] && . $CDIR/conf 2>/dev/null
   PKG=$P_PKG
   # 录制型 profile 的空包名才表示裸录；脚本型/旧配置缺包名回退工行。
   if [ "$P_TYPE" != "record" ] && [ -z "$PKG" ]; then PKG=com.icbc; fi
+  # 录制方式 (P_SCOPE): 空/pkg = 指定包名录取(核心路径, 上面原样保留);
+  # all = 全场录取 —— 不绑定包名、不因离开某个 app 暂停, 连系统手势区的滑动也照录,
+  # 因为「回桌面 / 边缘返回」本身就是跨 App 流程的一部分, 过滤掉回放就断了。
+  ZONEFILT=1
+  if [ "$P_SCOPE" = "all" ]; then
+    PKG=
+    ZONEFILT=0
+  fi
   disc_tdev
   [ -e "$TDEV" ] || { log "FATAL 触摸设备不可用: $TDEV"; exit 1; }
   disc_geo
   chmod 600 "$LOG" "$TMP" 2>/dev/null
-  log "DAEMON start N=$N K=$K TDEV=$TDEV PKG=$PKG SW=$SW SH=$SH MX=${MX:-} MY=${MY:-}"
+  log "DAEMON start N=$N K=$K TDEV=$TDEV PKG=$PKG SCOPE=${P_SCOPE:-pkg} SW=$SW SH=$SH MX=${MX:-} MY=${MY:-}"
   # 录制期间保持屏幕常亮 (否则录到一半超时锁屏), stop 时恢复
   STAY0=$(dumpsys power 2>/dev/null | grep -m1 'mStayOn=' | sed 's/.*mStayOn=\([^ ]*\).*/\1/')
   case "$STAY0" in true|false|usb|ac|wireless) ;; *) STAY0=false;; esac

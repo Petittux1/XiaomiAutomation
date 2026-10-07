@@ -17,12 +17,16 @@ It works by **direct root control** (`screencap` / `getevent` / `sendevent`) —
 
 - A built-in "ICBC daily watering" profile runs every day at `07:30` by default; it can also be triggered manually, and on the first ICBC launch of the day.
 - Independent scheduling per profile: each task has its own time, enable flag, target package and action sequence.
+- **Pick the weekdays**: both the global schedule and every task carry seven Mon–Sun toggles, so you choose exactly which days fire. A task with nothing ticked follows the global setting; `0` means no scheduled run at all that week (manual runs are unaffected).
 - App-bound recording: recording starts once you switch to the target app, pauses when you leave and resumes when you come back; it also pauses on a locked or dark screen.
+- **Record-everything mode**: switch the recording mode to "Record everything" and a task with an empty package name keeps recording across app switches, starting from the home screen; replay goes back to the home screen first by default so every run starts from the same place. The original package-bound mode is unchanged.
 - Bare recording: with an empty package name it records from a lit screen, filtering system edge and bottom swipes by rule.
+- **Pattern unlock**: the unlock method list gains "Pattern" — draw your 4–9 point pattern on the nine-dot pad in the WebUI and the module replays it by dragging before each run. The coordinates are tunable per device, and a "lock → unlock" round-trip test button is there for calibration.
+- **The built-in task can be deleted and restored**: the built-in "ICBC daily watering" task can now be removed from the WebUI; once deleted it is not recreated on reboot or upgrade. The "Restore the built-in ICBC task" button rebuilds it on demand.
 - On replay it handles waking the screen, unlocking, launching the target app and confirming the foreground, then restores rotation lock, stay-awake and the screen timeout.
 - **Background cleanup after each run**: the target app is closed with `am force-stop` when the task ends, so it stops holding memory and the next task starts clean. One global switch, plus a per-task override.
 - **Multilingual WebUI**: Chinese / English / Français / Русский, switchable from the top right; the choice is remembered.
-- **Multi-device support**: a device-profile layer can adjust screen size, display ID and the lock-screen keypad geometry per model, so recording, replay and PIN auto-unlock also work on other HyperOS 4 phones. The Xiaomi 17 Pro measured baseline is kept exactly as it is and is not affected.
+- **Multi-device support**: a device-profile layer can adjust screen size, display ID, the lock-screen keypad geometry and the pattern grid per model, so recording, replay and PIN / pattern auto-unlock also work on other HyperOS 4 phones. The Xiaomi 17 Pro measured baseline is kept exactly as it is and is not affected.
 - **WebUI updates with the module**: assets carry a version tag, caching is disabled, and the page self-checks whether the document is stale and reloads it — no more uninstalling and reinstalling after an update.
 - **A calmer interface**: a status summary at the top, everything else tucked into collapsible sections so the first screen is no longer one wall of form; expand / collapse everything in one tap.
 - The PIN is written only to the on-device config and never appears in the status output, the log or the source.
@@ -46,19 +50,25 @@ Magisk is the one exception: upstream Magisk contains **no WebView code whatsoev
 
 In any environment you can drive the same backend from a root shell via `webctl.sh`:
 
-```shsu -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh status'
+```sh
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh status'
 su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh settime 0730'
 su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh trigger'      # run the built-in task now
 su -c 'WEBUI_PIN=123456 sh /data/adb/modules/icbc_daily_water/webctl.sh setpin'
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh setdays 1234567'   # every day; 135 = Mon/Wed/Fri, 0 = nothing scheduled
+su -c 'WEBUI_PATTERN=14789 sh /data/adb/modules/icbc_daily_water/webctl.sh setpattern'  # save the pattern; no value clears it
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh unlock'       # lock → unlock round-trip test (pattern / PIN calibration)
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh profile del icbc'   # delete the built-in ICBC task (no_icbc marker, never rebuilt)
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh profile addicbc'    # restore the built-in ICBC task
 ```
 
-The PIN is deliberately accepted **only through the `WEBUI_PIN` environment variable**, never as a command-line argument, so the plaintext never shows up in the process list. Type that last line by hand in a local terminal — do not put it in a script, an alias or a chat log.
+The PIN is deliberately accepted **only through the `WEBUI_PIN` environment variable**, never as a command-line argument, so the plaintext never shows up in the process list. The pattern works the same way through `WEBUI_PATTERN`: 4–9 distinct digits `1–9`, and an empty value clears the pattern. Type those lines by hand in a local terminal — do not put them in a script, an alias or a chat log.
 
-The full subcommand list is in the file header: `webctl.sh status|setpin|settime|setenable|setmode|setopen|setsleep|setwatch|setcleanup|trigger[NAME]|restart|log|profiles|profile add/del/set|record start/stop/status`.
+The full subcommand list is in the file header: `webctl.sh status|setpin|setpattern|settime|setdays|setenable|setmode|setopen|setsleep|setwatch|setcleanup|unlock|trigger[NAME]|restart|log|profiles|profile add/addicbc/del/set|record start/stop/status`.
 
 ## Installation
 
-1. Download `XiaomiAutomation-v0.12.10.zip` from Releases.
+1. Download `XiaomiAutomation-v0.13.0.zip` from Releases.
 2. Flash that zip in KernelSU / Magisk.
 3. Reboot, open the module WebUI and set the unlock method and PIN as needed.
 4. For a recorded task, fill in the target app package name; switch to that app and press "Start recording", then press "Stop recording" when you are done.
@@ -75,7 +85,7 @@ id=icbc_daily_water
 
 Do not delete these directories or change the module ID; your configuration, profiles, PIN and recorded actions are carried over.
 
-> If the WebUI still looks stale after upgrading, check the version in the top right — it must read `v0.12.4`. If it does not, the old package was installed.
+> If the WebUI still looks stale after upgrading, check the version in the top right — it must read `v0.13.0`. If it does not, the old package was installed.
 
 ## Usage
 
@@ -83,14 +93,25 @@ Do not delete these directories or change the module ID; your configuration, pro
 
 The "ICBC daily watering" task is created on first install. It is a script profile that calls the built-in `water.sh`, which performs the ICBC home-page check, taps the task entry and runs the watering flow. The default schedule is `07:30` and can be changed in the WebUI.
 
+The built-in task can now be **deleted**: the "Delete" button on its card works like on any other task. Deleting writes the `/data/adb/icbc_water/no_icbc` marker, so neither the boot daemon nor an upgrade recreates it. To bring it back, press "Restore the built-in ICBC task" (or run `webctl.sh profile addicbc`) — it is rebuilt with the current global time and the marker is cleared, so you can delete and restore it as often as you like.
+
+### Choosing the weekdays
+
+- The **global execution days** row in "⚙️ Other" is a Mon–Sun button strip. All seven on means every day (the default); switching a day off stops every scheduled task on that day.
+- Each task card has its own **execution days** row, defaulting to "Follow the global setting". Tick it and that task only runs on the days you picked, independent of the global row.
+- Values: empty = follow the global setting (global empty = every day), `0` = never scheduled that week, otherwise an ascending `1-7` string (`135` = Mon / Wed / Fri).
+- Manual "▶ Run" ignores execution days and always runs; the "first ICBC launch of the day" path only fires on execution days.
+
 ### Recorded tasks
 
-1. Add a task in the WebUI with a name and a target package name; leaving the package empty records the whole lit screen.
+1. Add a task in the WebUI with a name, then pick a **recording mode**:
+   - **Package-bound recording** (default): fill in the target app package name; recording starts once you switch to that app, pauses when you leave and resumes when you come back.
+   - **Record everything**: leave the package empty and switch the mode to "Record everything"; recording starts from the home screen and keeps going across app switches without pausing. Replay returns to the home screen first by default, so every run starts from the same place.
 2. Press "Start recording" on the task, then switch to the target app.
 3. Come back to the WebUI and press "Stop recording".
 4. Check the action count, then run it now or wait for its schedule.
 
-To capture edge-back gestures, fill in the target package name: the app-bound mode keeps edge swipes and discards actions taken in other apps.
+To capture edge-back gestures, use package-bound recording with the target package filled in: that mode keeps edge swipes and discards actions taken in other apps.
 
 ### Background cleanup
 
@@ -105,7 +126,9 @@ Two exceptions to keep in mind:
 
 ### Lock screen and power
 
-Before a task the module tries to wake and unlock the screen, either by blind PIN entry or by swiping up. It keeps the screen awake while running and restores the original rotation lock, `screen_off_timeout` and stay-awake setting afterwards. If the lock state cannot be confirmed it aborts safely instead of injecting blind coordinates.
+Before a task the module tries to wake and unlock the screen, either by blind PIN entry, by replaying your pattern, or by swiping up. It keeps the screen awake while running and restores the original rotation lock, `screen_off_timeout` and stay-awake setting afterwards. If the lock state cannot be confirmed it aborts safely instead of injecting blind coordinates.
+
+**Pattern unlock**: choose "Pattern" as the unlock method, then tap out 4–9 distinct dots on the nine-dot pad in the WebUI (drag to connect them; the "middle dot" Android accepts is filled in automatically) and save. The pattern stays in the on-device config — the interface only ever echoes "set", never the dot order. The pad defaults to coordinates estimated for the Xiaomi 17 Pro; on another phone tune `PAT_X0` / `PAT_Y0` (top-left dot) and `PAT_DX` / `PAT_DY` (spacing) in the "📱 Device profile" card, then press the "lock → unlock test" button: success prints `UNLOCK_OK`, and a miss means nudge the four values and try again. With no pattern set the module falls back to PIN or swipe.
 
 ### Language
 
@@ -117,10 +140,11 @@ The default target device is the Xiaomi 17 Pro. The module discovers the touch d
 
 ### Moving to another phone: the device profile
 
-The "📱 Device profile" card affects exactly three things: **screen width/height, display ID, and the lock-screen keypad geometry**. Those are what decide whether recording, replay and PIN auto-unlock work, and they differ on other phones, so they need their own values.
+The "📱 Device profile" card affects exactly these things: **screen width/height, display ID, the lock-screen keypad geometry, and the nine-dot pattern grid**. Those are what decide whether recording, replay and PIN / pattern auto-unlock work, and they differ on other phones, so they need their own values.
 
 - **Xiaomi 17 Pro**: the card already holds the measured values — **leave them alone**. Keep "Enable override" off and the module uses the original values from `water.sh` / `sched.conf`.
 - **Other HyperOS 4 models** (Xiaomi 17, 17 Pro Max, …): press "🔍 Auto-detect this phone" to fill in `wm size` and `wm density`, check the numbers, then tick "Enable override" and save. The lock-screen keypad cannot be detected reliably, so fill it in by hand — otherwise the 17 Pro values are used and the wrong digits get tapped.
+- **Pattern grid**: `PAT_X0` / `PAT_Y0` is the pixel position of the first dot (top-left) and `PAT_DX` / `PAT_DY` the horizontal / vertical spacing (defaults `270 / 1000 / 340 / 340`, estimated for the 17 Pro). Verify with the "lock → unlock test" button: if the wrong cells get drawn, adjust these four values and re-test until it prints `UNLOCK_OK`.
 - The profile lives in `/data/adb/icbc_water/device.conf`. `DEV_APPLY=0` (the default) means "no override, use the 17 Pro baseline"; only `DEV_APPLY=1` turns the override on. Every value must pass a "unique + digits only" check, so a mistake or a corrupted file can at worst leave the override inactive — it cannot break the watering flow.
 
 > **Every model other than the Xiaomi 17 Pro is "testing".** Resolution, DPI and system bar heights all affect the UI layout, so: **the ICBC flow is not guaranteed to work**; but **recording, replay and PIN auto-unlock work normally**. Do not try it on a daily-driver phone.
@@ -166,7 +190,7 @@ bash tools/build_zip.sh
 The script writes the following file into the parent directory:
 
 ```text
-XiaomiAutomation-v0.12.10.zip
+XiaomiAutomation-v0.13.0.zip
 ```
 
 ## License

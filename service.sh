@@ -18,16 +18,28 @@ POWER_BAK=$BASE/power.bak
 [ -f $CFG ] && . $CFG
 SCHED_ENABLE=${SCHED_ENABLE:-1}
 SCHED_TIME=${SCHED_TIME:-0730}
+# SCHED_DAYS: 全局「哪几天跑」。1234567=每天(默认) 0=一天都不跑 空=每天。
+# 只认 0-7 的纯数字串, 顺序升序无重复; 非法值一律按每天处理, 宁可多跑也不静默漏跑。
+SCHED_DAYS=${SCHED_DAYS:-1234567}
 UNLOCK_MODE=${UNLOCK_MODE:-pin}
 OPEN_MODE=${OPEN_MODE:-monkey}
 SLEEP_AFTER=${SLEEP_AFTER:-1}
 WATCH_OPEN=${WATCH_OPEN:-0}
 CLEANUP_AFTER=${CLEANUP_AFTER:-1}
 PIN=${PIN:-}
+# PATTERN: 图案解锁的宫格点序, 只能是 1-9 的纯数字串且不重复 (从左上到右下按 1..9 编号)。
+# 留空 = 用 PIN; UNLOCK_MODE=pattern 且本值为空时退回上滑兜底, 不会卡死调度。
+PATTERN=${PATTERN:-}
 PIN_X0=${PIN_X0:-290}
 PIN_Y0=${PIN_Y0:-1015}
 PIN_DX=${PIN_DX:-320}
 PIN_DY=${PIN_DY:-210}
+# 图案宫格几何基线 (17 Pro 居中估算, 实测值写进 sched.conf 或设备档案 DEV_PAT_*)。
+# PAT_X0/PAT_Y0 = 第 1 格中心, PAT_DX/PAT_DY = 相邻两格中心距。
+PAT_X0=${PAT_X0:-270}
+PAT_Y0=${PAT_Y0:-1000}
+PAT_DX=${PAT_DX:-340}
+PAT_DY=${PAT_DY:-340}
 
 # 锁屏 PIN 宫格坐标: 设备档案覆盖 (opt-in)
 # 17 Pro 走 DEV_APPLY=0, 本段不执行, 上面四个值就是 sched.conf 里的实测值。
@@ -49,6 +61,16 @@ if [ "$(grep -c '^DEV_APPLY=' "$PINCONF" 2>/dev/null)" = "1" ] \
   if [ -n "$PV_Y0" ] && [ "$PV_Y0" -ge 1 ] 2>/dev/null; then PIN_Y0=$PV_Y0; fi
   if [ -n "$PV_DX" ] && [ "$PV_DX" -ge 1 ] 2>/dev/null; then PIN_DX=$PV_DX; fi
   if [ -n "$PV_DY" ] && [ "$PV_DY" -ge 1 ] 2>/dev/null; then PIN_DY=$PV_DY; fi
+  # 图案宫格几何同样接受设备档案覆盖 (与上面的 PIN 四参同一把闸, 一个总闸管两套几何)。
+  # 少于 1 的值一律丢弃: 宫格坐标没有 0 也没有负数, 脏值会让图案整条线画到屏幕外。
+  PV_PX0=$(pinpick DEV_PAT_X0)
+  PV_PY0=$(pinpick DEV_PAT_Y0)
+  PV_PDX=$(pinpick DEV_PAT_DX)
+  PV_PDY=$(pinpick DEV_PAT_DY)
+  if [ -n "$PV_PX0" ] && [ "$PV_PX0" -ge 1 ] 2>/dev/null; then PAT_X0=$PV_PX0; fi
+  if [ -n "$PV_PY0" ] && [ "$PV_PY0" -ge 1 ] 2>/dev/null; then PAT_Y0=$PV_PY0; fi
+  if [ -n "$PV_PDX" ] && [ "$PV_PDX" -ge 1 ] 2>/dev/null; then PAT_DX=$PV_PDX; fi
+  if [ -n "$PV_PDY" ] && [ "$PV_PDY" -ge 1 ] 2>/dev/null; then PAT_DY=$PV_PDY; fi
 fi
 
 # 日志裁剪: 超过 200KB 保留末尾 100 行
@@ -78,7 +100,7 @@ done
 sleep 1
 
 VER=$(grep -m1 '^version=' $M/module.prop 2>/dev/null | cut -d= -f2)
-echo $(date +%m%d-%H%M) SD_BOOT M8 $VER SCHED=$SCHED_TIME EN=$SCHED_ENABLE WATCH=$WATCH_OPEN >> $LOG
+echo $(date +%m%d-%H%M) SD_BOOT M8 $VER SCHED=$SCHED_TIME DAYS=$SCHED_DAYS EN=$SCHED_ENABLE WATCH=$WATCH_OPEN UNLOCK=$UNLOCK_MODE >> $LOG
 
 # ---------- 设备发现 (getevent 单遍扫描 + boot_id 缓存) ----------
 discdev() {
@@ -249,6 +271,64 @@ pin_enter() {
   done
 }
 
+# 图案解锁: 按下 -> 依次经过每一格 -> 抬起, 一气呵成的一次连续拖拽。
+# 宫格编号 1..9 从左上到右下 (与 WebUI 九宫格一致)。Android 自己会把"路过但没点"
+# 的中间格补进图案, 所以 1-9 这种斜线只画两个端点就够了, 不需要我们多走一步。
+# 本函数只认 1-9 的纯数字串; 出现 0/重复点/非法字符直接放弃, 交给上滑兜底,
+# 宁可不解锁也不要把一条错线画到别人的锁屏上反复触发失败计数。
+pat_enter() {
+  [ -n "$TDEV" ] || return 1
+  case "$PATTERN" in
+    ''|*[!1-9]*) return 1;;
+  esac
+  PT=$PATTERN
+  PX0_S=0; PY0_S=0
+  while [ -n "$PT" ]; do
+    PC=$(printf '%s' "$PT" | cut -c1)
+    PREST=$(printf '%s' "$PT" | cut -c2-)
+    case "$PREST" in *"$PC"*) return 1;; esac
+    PT=$PREST
+  done
+  sendevent $TDEV 3 47 0
+  sendevent $TDEV 3 57 1
+  PFI=1
+  i=1
+  while [ $i -le ${#PATTERN} ]; do
+    d=$(printf '%s' "$PATTERN" | cut -c $i)
+    v=$(( d - 1 ))
+    x=$(( PAT_X0 + ( v % 3 ) * PAT_DX ))
+    y=$(( PAT_Y0 + ( v / 3 ) * PAT_DY ))
+    if [ $PFI -eq 1 ]; then
+      sendevent $TDEV 3 53 $(( x * K ))
+      sendevent $TDEV 3 54 $(( y * K ))
+      sendevent $TDEV 3 48 20
+      sendevent $TDEV 3 49 20
+      sendevent $TDEV 1 330 1
+      sendevent $TDEV 0 0 0
+      PFI=0
+      sleep 0.15
+    else
+      # 每格之间分几步插值走过去: 直接跳格会让系统判定成"瞬移", 图案识别不到。
+      pl=1
+      while [ $pl -le 4 ]; do
+        sendevent $TDEV 3 53 $(( ( PX0_S + ( x - PX0_S ) * pl / 4 ) * K ))
+        sendevent $TDEV 3 54 $(( ( PY0_S + ( y - PY0_S ) * pl / 4 ) * K ))
+        sendevent $TDEV 0 0 0
+        sleep 0.04
+        pl=$((pl+1))
+      done
+      sleep 0.1
+    fi
+    PX0_S=$x; PY0_S=$y
+    i=$((i+1))
+  done
+  sleep 0.15
+  sendevent $TDEV 3 57 -1
+  sendevent $TDEV 1 330 0
+  sendevent $TDEV 0 0 0
+  return 0
+}
+
 unlock_screen() {
   # 1) 系统 dismiss (无密码锁屏可直接解)
   wm dismiss-keyguard 2>/dev/null
@@ -256,8 +336,30 @@ unlock_screen() {
   LS=$(lock_state)
   [ "$LS" = "0" ] && return 0
   [ "$LS" = "2" ] && return 1
-  # 2) pin 模式: 带节奏上滑呼出键盘 -> 盲打完整PIN (长度够系统自动提交)
-  if [ "$UNLOCK_MODE" = "pin" ] && [ -n "$PIN" ]; then
+  # 2) 图案模式: 带节奏上滑露出图案挑战 -> 一笔画完 (每格之间分步插值)
+  #    没配图案时自动落到下面的 PIN 分支, 不会因为少配一项就卡住整条调度链。
+  if [ "$UNLOCK_MODE" = "pattern" ] && [ -n "$PATTERN" ]; then
+    n=0
+    while [ $n -lt 3 ]; do
+      sweep_up
+      sleep 1.2
+      pat_enter
+      sleep 2
+      LS=$(lock_state)
+      [ "$LS" = "0" ] && return 0
+      [ "$LS" = "2" ] && return 1
+      # 不把锁屏截图写入共享存储, 避免泄露通知与图案状态。
+      sback 2>/dev/null
+      sleep 0.8
+      n=$((n+1))
+    done
+  fi
+  # 3) pin 模式: 带节奏上滑呼出键盘 -> 盲打完整PIN (长度够系统自动提交)
+  #    「图案模式但没画图案」也走这里 —— 有 PIN 就总比上滑兜底多一层机会。
+  USE_PIN=0
+  [ "$UNLOCK_MODE" = "pin" ] && [ -n "$PIN" ] && USE_PIN=1
+  [ "$UNLOCK_MODE" = "pattern" ] && [ -z "$PATTERN" ] && [ -n "$PIN" ] && USE_PIN=1
+  if [ $USE_PIN -eq 1 ]; then
     n=0
     while [ $n -lt 3 ]; do
       sweep_up
@@ -373,9 +475,43 @@ fg_pkg() {  # 从 dumpsys 行提取精确包名；空结果表示无法确认前
   printf '%s\n' "$R"
 }
 
+# ---------- 每周执行日 (哪几天跑) ----------
+# P_DAYS / SCHED_DAYS 形态: 空=继承全局 0=一天都不跑 1234567=每天,
+# 中间还可以是任意升序子串如 135 (周一三五)。只认这种形态, 脏值一律按每天处理 ——
+# 漏跑一天用户第二天才发现, 而"多跑"顶多是白跑一次, 两者代价不对等。
+days_shape() {
+  [ -z "$1" ] && return 0
+  [ "$1" = "0" ] && return 0
+  case "$1" in *[!1-7]*) return 1;; esac
+  DS=$1; DP=0; DI=1
+  while [ $DI -le ${#DS} ]; do
+    DC=$(printf '%s' "$DS" | cut -c $DI)
+    [ "$DC" -le "$DP" ] && return 1
+    DP=$DC
+    DI=$((DI+1))
+  done
+  return 0
+}
+
+# day_ok 今天是不是执行日; $1 = 该 profile 的 P_DAYS (空则用全局 SCHED_DAYS)
+day_ok() {
+  DD=$1
+  [ -z "$DD" ] && DD=$SCHED_DAYS
+  days_shape "$DD" || DD=1234567
+  [ -z "$DD" ] && return 0
+  [ "$DD" = "0" ] && return 1
+  DW=$(date +%u 2>/dev/null)
+  case "$DW" in 1|2|3|4|5|6|7) ;; *) return 0;; esac
+  case "$DD" in *"$DW"*) return 0;; esac
+  return 1
+}
+
 # ---------- 内置工行 profile 兜底 (防删除/首次安装缺目录) ----------
 ensure_profiles() {
   mkdir -p $PFX 2>/dev/null
+  # 用户在 WebUI 里删掉内置工行任务会留下 no_icbc 标记。开机重建必须让路,
+  # 否则删一次、重启一次就复活一次 —— 那个删除按钮就成了摆设。
+  [ -f $BASE/no_icbc ] && return 0
   if [ ! -f $PFX/icbc/conf ]; then
     mkdir -p $PFX/icbc 2>/dev/null
     {
@@ -443,10 +579,14 @@ run_profile() {
   CDIR=$PFX/$PN
   # 读 profile 配置 (P_ 前缀防与全局冲突)
   P_NAME=; P_TYPE=script; P_PKG=; P_SCHED=; P_ENABLE=; P_CLEANUP=
+  P_DAYS=; P_SCOPE=; P_HOME=1
   [ -f $CDIR/conf ] && . $CDIR/conf 2>/dev/null
   # 录制型 profile 允许 P_PKG 为空: 亮屏回放当前画面, 不强行打开工行。
   # 脚本型 profile 若历史配置缺包名, 仍回退到内置工行。
   if [ "$P_TYPE" = "script" ] && [ -z "$P_PKG" ]; then P_PKG=com.icbc; fi
+  # 全场录取 (P_SCOPE=all): 录的时候就没绑定包名, 回放自然也不许被兜底逻辑塞回 com.icbc
+  # —— 否则「跨 App 全场录取」会退化成「打开工行再回放一堆别处的动作」。
+  if [ "$P_SCOPE" = "all" ]; then P_PKG=; fi
   # 清理开关: profile 的 P_CLEANUP 覆盖全局 CLEANUP_AFTER; 非法值一律回退全局。
   CLEANO=$CLEANUP_AFTER
   case "$P_CLEANUP" in
@@ -551,7 +691,18 @@ run_profile() {
           fi
         fi
       else
-        echo "V2_OPEN P=$PN PKG= (裸录/当前画面)" >> $LOG
+        # 全场录取的回放起点: 默认先回桌面 (P_HOME=1), 这样录制时「从桌面点进 app」
+        # 的第一步在回放时才有同样的起点; 关掉开关就保持当前画面 (原裸录语义不变)。
+        # 只在没有包名时生效 —— 指定包名的任务有自己的 open_pkg 起点, 不该被拽回桌面。
+        if [ -z "$P_PKG" ] && [ "$P_HOME" != "0" ]; then
+          am start -a android.intent.action.MAIN -c android.intent.category.HOME \
+            -f 0x10000000 >/dev/null 2>&1
+          HRC=$?
+          sleep 2
+          echo "V2_OPEN P=$PN PKG= (回放前先回桌面 rc=$HRC)" >> $LOG
+        else
+          echo "V2_OPEN P=$PN PKG= (裸录/当前画面)" >> $LOG
+        fi
       fi
       if [ $ABORT -eq 0 ]; then
         if [ "$P_TYPE" = "script" ]; then
@@ -681,6 +832,29 @@ while true; do
     FPN=$(cat $M/now.txt 2>/dev/null)
     rm -f $M/now.txt
   fi
+  # 一次性请求: 锁屏->解锁 往返测试 (WebUI 的「测试解锁」按钮)。
+  # 先真锁一次再解锁 —— 屏幕本来就没锁的话, 测出来的只是"没锁的屏幕能进桌面",
+  # 对校准图案宫格毫无意义。结果写 unlock.out, webctl.sh unlock 轮询它回报。
+  if [ -f $M/unlock.txt ]; then
+    rm -f $M/unlock.txt
+    rm -f $M/unlock.out
+    if [ -n "$PDEV" ]; then
+      sendevent $PDEV 1 116 1; sendevent $PDEV 0 0 0
+      sleep 0.05
+      sendevent $PDEV 1 116 0; sendevent $PDEV 0 0 0
+      sleep 1.5
+    fi
+    wake_screen; UW=$?
+    unlock_screen; UU=$?
+    if [ $UW -eq 0 ] && [ $UU -eq 0 ]; then
+      echo $(date +%m%d-%H%M) UNTEST OK W=$UW U=$UU >> $LOG
+      echo "UNLOCK_OK" > $M/unlock.out
+    else
+      echo $(date +%m%d-%H%M) UNTEST FAIL W=$UW U=$UU >> $LOG
+      echo "UNLOCK_FAIL w=$UW unlock=$UU" > $M/unlock.out
+    fi
+    continue
+  fi
   CT=0
   [ -f $M/try.txt ] && CT=$(cat $M/try.txt 2>/dev/null)
   C=0
@@ -707,13 +881,17 @@ while true; do
   for pconf in $PFX/*/conf; do
     [ -f "$pconf" ] || continue
     PN=$(echo "$pconf" | sed -E 's|.*/profiles/([^/]+)/conf|\1|')
-    P_TYPE=script; P_PKG=; P_SCHED=; P_ENABLE=
+    P_TYPE=script; P_PKG=; P_SCHED=; P_ENABLE=; P_DAYS=
     . $pconf 2>/dev/null
     # 录制型 profile 的空包名是有效配置, 不要在调度层改写成 com.icbc。
     if [ "$P_TYPE" = "script" ] && [ -z "$P_PKG" ]; then P_PKG=com.icbc; fi
     # 定时沿用: profile 未写 P_SCHED/P_ENABLE 则用全局
     PSCHED=${P_SCHED:-$SCHED_TIME}
     PEN=${P_ENABLE:-$SCHED_ENABLE}
+    # 执行日闸: P_DAYS 空 = 跟随全局 SCHED_DAYS。FORCE 分支在上面, 故意不走这个闸 ——
+    # 手动点「立即运行」本来就是"现在就要跑", 被"今天不在计划里"挡住会像是按钮坏了。
+    DAY_OK=1
+    day_ok "$P_DAYS" || DAY_OK=0
     # 触发窗口: 到点后60分钟内 (纯看时间; 跨零点衔接)
     PSM=$(hhmm2m $PSCHED)
     WINDOW_OK=0
@@ -737,7 +915,7 @@ while true; do
       fi
       continue
     fi
-    if [ "$PEN" = "1" ] && [ $WINDOW_OK -eq 1 ] && [ $PDONE -eq 0 ] && [ ${PCT:-0} -lt 3 ]; then
+    if [ "$PEN" = "1" ] && [ $DAY_OK -eq 1 ] && [ $WINDOW_OK -eq 1 ] && [ $PDONE -eq 0 ] && [ ${PCT:-0} -lt 3 ]; then
       HIT=$PN
       HITF=0
       break
@@ -751,11 +929,17 @@ while true; do
 
   # ---- 链路B: 每日首次打开工行自动浇水 (原 v1, 仅作用于 icbc 脚本型) ----
   if [ "${WATCH_OPEN:-0}" = "1" ] && [ -f $PFX/icbc/conf ]; then
+    # 链路B 同样认执行日: 计划里没排到今天, 打开工行也不自动浇水。
+    # 这里只 sed 出 P_DAYS 一个键, 不 source 整份 conf —— 它紧挨着 profile 循环,
+    # source 进来的 P_PKG/P_TYPE 会把循环里的临时变量污染成工行的值。
+    ICDAYS=$(sed -n 's/^P_DAYS=//p' $PFX/icbc/conf 2>/dev/null | head -1)
+    WDAY=1
+    day_ok "$ICDAYS" || WDAY=0
     IDONE=0
     [ -f $PFX/icbc/state.txt ] && [ "$(cat $PFX/icbc/state.txt 2>/dev/null)" = "$T" ] && IDONE=1
     ICT=0
     [ -f $PFX/icbc/try.txt ] && ICT=$(cat $PFX/icbc/try.txt 2>/dev/null)
-    if [ $IDONE -eq 0 ] && [ ${ICT:-0} -lt 3 ] && [ $COOLOK -eq 1 ]; then
+    if [ $WDAY -eq 1 ] && [ $IDONE -eq 0 ] && [ ${ICT:-0} -lt 3 ] && [ $COOLOK -eq 1 ]; then
       FG=$(fg_detect)
       [ -f $M/debug.txt ] && echo $(date +%H%M) DBG0 "$FG" >> $LOG
       FGP=$(fg_pkg "$FG")

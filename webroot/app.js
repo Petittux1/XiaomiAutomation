@@ -16,6 +16,11 @@ let recPoll = null;   // 录制状态轮询定时器
 // 值格式都是 HHMM(如 '0730'), 与 webctl status 的 sched= / enable= 一致。
 let gloSched = '0730';
 let gloEn = true;
+// 全局每周执行日 (sched.conf 的 SCHED_DAYS)。任务自己的 P_DAYS 为空时用这个值。
+// 格式与服务端一致: '1234567'=每天, '0'=一周都不跑, 升序子串如 '135'=周一三五。
+let gloDays = '1234567';
+// 图案点序 (本地草稿)。画完还没保存时也留在这里, 保存成功后由服务端回读。
+let patSeq = '';
 
 // ---------- WebUI 文档缓存自愈 ----------
 // 现象: 模块升级后 WebUI 仍是旧界面, 必须卸载重装才更新。
@@ -120,6 +125,47 @@ function esc(s) {
     .replace(/"/g, '&quot;');
 }
 
+// ---------- 每周执行日 ----------
+// 星期文案写成 7 个字面量调用, 刻意不写成「拼键」: 回归守卫靠「字面量调用」
+// 收集 i18n 引用点, 动态拼出来的键会变成四种语言里都没人引用的孤儿键。
+function dayLabel(n) {
+  if (n === 2) return t('day.2');
+  if (n === 3) return t('day.3');
+  if (n === 4) return t('day.4');
+  if (n === 5) return t('day.5');
+  if (n === 6) return t('day.6');
+  if (n === 7) return t('day.7');
+  return t('day.1');
+}
+
+const DAYS = ['1', '2', '3', '4', '5', '6', '7'];
+
+// '1234567' / '135' / '0' / '' -> ['1','3','5'] 这样的选中列表
+function dayList(s) {
+  const str = String(s == null ? '' : s);
+  return DAYS.filter((d) => str.indexOf(d) !== -1);
+}
+
+// 选中列表 -> 服务端要的升序串; 一个都没选写 '0'(一周都不跑), 不写空
+// (空在服务端的含义是「跟随全局」, 那是另一个按钮的事)
+function joinDays(list) { return list.length ? list.join('') : '0'; }
+
+// inherit=true 表示这串值来自全局设置, 按钮画成虚线边框 —— 「亮着」不等于「自己定的」
+function dayBtnsHtml(str, inherit) {
+  const on = dayList(str);
+  return DAYS.map((d) => {
+    const cls = ((on.indexOf(d) !== -1 ? 'on' : '') + (inherit ? ' inherit' : '')).trim();
+    const lab = dayLabel(parseInt(d, 10));
+    return '<button type="button" data-act="pDay" data-day="' + d + '" class="' + cls +
+           '" title="' + esc(lab) + '">' + esc(lab) + '</button>';
+  }).join('');
+}
+
+function renderDayBtns(box, str, inherit) {
+  if (!box) return;
+  box.innerHTML = dayBtnsHtml(str, inherit);
+}
+
 async function loadStatus() {
   const out = await run('status');
   const cfg = {};
@@ -144,20 +190,35 @@ async function loadStatus() {
   $('sleep').checked = cfg.SLEEP_AFTER === '1';
   // 老配置里没有 CLEANUP_AFTER 时保持模块默认值(开), 与 service.sh 的回落一致。
   $('cleanup').checked = (cfg.CLEANUP_AFTER === undefined ? '1' : cfg.CLEANUP_AFTER) === '1';
-  $('mode').value = cfg.UNLOCK_MODE === 'swipe' ? 'swipe' : 'pin';
+  $('mode').value = (cfg.UNLOCK_MODE === 'swipe' || cfg.UNLOCK_MODE === 'pattern') ? cfg.UNLOCK_MODE : 'pin';
+  $('patBox').hidden = $('mode').value !== 'pattern';
   $('pin').placeholder = (cfg.PIN && cfg.PIN.length > 0) ? t('ph.pinSet') : t('ph.pinUnset');
+  // 图案是否已保存: 服务端把点序脱敏成「已设置」, 这里只判断有没有值。
+  // 本地已经画了但还没保存时, 以画布里的草稿为准, 别被后台轮询刷掉。
+  if (!patSeq) {
+    $('patStat').textContent = (cfg.PATTERN && cfg.PATTERN.length > 0) ? t('pat.set') : t('pat.unset');
+  }
+  // 全局执行日 (任务自己的 P_DAYS 为空时跟随它)
+  gloDays = (cfg.SCHED_DAYS && /^[0-7]+$/.test(cfg.SCHED_DAYS)) ? cfg.SCHED_DAYS : '1234567';
+  renderDayBtns($('daysGlobalBtns'), gloDays, false);
+  // 内置工行任务是否还在: 被删掉才给「恢复」入口
+  $('icbcRow').hidden = cfg.icbc_present !== 'no';
   // 触发检查
   const svcRun = cfg._svc === 'running';
   const enabled = cfg.enable === '1';
   const screenOff = cfg.screen === '0';
   const winOk = cfg.window_ok === 'yes';
   const doneOk = cfg.done_ok === 'yes';
+  // 今天是不是执行日。day_ok 缺失(服务端还没重启到新版本)时按「是」显示,
+  // 不拿一个读不到的字段去吓唬用户。
+  const dayOk = cfg.day_ok !== 'no';
   const failN = parseInt(cfg._fail || '0', 10);
   const failOk = failN < 3;
   const rows = [
     chkRow(t('chk.svc'), svcRun ? t('st.svcRun') : t('st.svcStop'), svcRun),
     chkRow(t('chk.enable'), enabled ? t('st.on') : t('st.off'), enabled),
     chkRow(t('chk.window'), winOk ? t('chk.windowYes', { now: cfg.now || '' }) : t('chk.windowNo'), winOk),
+    chkRow(t('chk.day'), dayOk ? t('chk.dayYes', { day: dayLabel(parseInt(cfg.day || '1', 10)) }) : t('chk.dayNo'), dayOk),
     chkRow(t('chk.done'), doneOk ? t('chk.doneYes') : t('chk.doneNo'), !doneOk),
     chkRow(t('chk.screen'), screenOff ? t('chk.screenOff') : t('chk.screenOn'), true),
     chkRow(t('chk.fail'), failOk ? t('chk.failN', { n: failN }) : t('chk.failBlocked', { n: failN }), failOk)
@@ -209,6 +270,10 @@ async function loadProfiles() {
     const isScript = (p.ptype || 'script') === 'script';
     const isRec = p.slug === recSlug;
     const hasPkg = !!(p.ppkg && p.ppkg !== '');
+    // 录制方式 / 回放起点 / 执行日 (P_DAYS 空 = 跟随全局 gloDays)
+    const isAll = p.pscope === 'all';
+    const homeOn = p.phome !== '0';
+    const ownDays = !!(p.pdays && p.pdays !== '');
     // 该任务的实际清理开关: P_CLEANUP 覆盖全局, 都没有时回落到全局(与服务端一致)。
     let cleanOn;
     if (p.pcleanup === '1') cleanOn = true;
@@ -229,16 +294,17 @@ async function loadProfiles() {
       '<span class="pn" title="' + esc(p.pname || p.slug) + '">' + esc(p.pname || p.slug) + '</span>' +
       '<div class="pbadges">' +
         '<span class="pill">' + esc(isScript ? t('prof.script') : t('prof.record')) + '</span>' +
+        (isAll ? '<span class="pill warn">' + esc(t('prof.allScope')) + '</span>' : '') +
         doneBadge +
         cleanBadge +
         (p.ptry && p.ptry !== '0' ? '<span class="pill">' + esc(t('prof.failN', { n: p.ptry })) + '</span>' : '') +
       '</div>' +
       '<div class="pm">' +
         '<span>' + esc(t('lbl.pkg')) + '</span>' +
-        '<input class="pkgbox" data-act="pPkg" value="' + esc(p.ppkg || '') + '" placeholder="' + esc(t('ph.pkgUnset')) + '"' + (isScript ? ' disabled' : '') + '>' +
-        '<button class="small" data-act="pPkgSave"' + (isScript ? ' disabled' : '') + '>' + esc(t('btn.savePkg')) + '</button>' +
+        '<input class="pkgbox" data-act="pPkg" value="' + esc(p.ppkg || '') + '" placeholder="' + esc(isAll ? t('prof.allScope') : t('ph.pkgUnset')) + '"' + (isScript || isAll ? ' disabled' : '') + '>' +
+        '<button class="small" data-act="pPkgSave"' + (isScript || isAll ? ' disabled' : '') + '>' + esc(t('btn.savePkg')) + '</button>' +
         (p.pacts && p.pacts !== '0' ? ' · ' + esc(t('prof.acts', { n: p.pacts })) : '') +
-        (isScript || hasPkg ? '' : ' · ' + esc(t('prof.bareNote'))) +
+        (isScript || hasPkg || isAll ? '' : ' · ' + esc(t('prof.bareNote'))) +
       '</div>' +
       '<div class="prow2">' +
         '<label><input type="checkbox" data-act="pEnable" ' + (en ? 'checked' : '') + '> ' + esc(t('lbl.enable')) + '</label>' +
@@ -256,7 +322,20 @@ async function loadProfiles() {
         '</select>') +
         '<button class="small primary" data-act="pRun">' + esc(isScript ? t('btn.runWater') : t('btn.runTask')) + '</button>' +
         (isScript ? '' : '<button class="small' + (isRec ? ' rec-on' : '') + '" data-act="pRec" data-state="' + (isRec ? 'recording' : 'idle') + '">' + esc(isRec ? t('btn.recStop') : t('btn.recStart')) + '</button>') +
-        (p.slug === 'icbc' ? '' : '<button class="small danger" data-act="pDel">' + esc(t('btn.del')) + '</button>') +
+        '<button class="small danger" data-act="pDel">' + esc(t('btn.del')) + '</button>' +
+      '</div>' +
+      // 第二行: 录制方式 + 回放起点 (录制型) + 每周执行日 (所有任务)
+      '<div class="prow2">' +
+        (isScript ? '' :
+          '<select class="cleanup" data-act="pScope" title="' + esc(t('lbl.recMode')) + '">' +
+            '<option value="pkg"' + (isAll ? '' : ' selected') + '>' + esc(t('opt.rec.pkg')) + '</option>' +
+            '<option value="all"' + (isAll ? ' selected' : '') + '>' + esc(t('opt.rec.all')) + '</option>' +
+          '</select>' +
+          '<label title="' + esc(t('lbl.pHome')) + '"><input type="checkbox" data-act="pHome"' + (homeOn ? ' checked' : '') + '> ' + esc(t('lbl.pHome')) + '</label>'
+        ) +
+        '<span class="dl" title="' + esc(t('lbl.days')) + '">' + esc(t('lbl.days')) + '</span>' +
+        '<span class="daybtns" data-daybox>' + dayBtnsHtml(ownDays ? p.pdays : gloDays, !ownDays) + '</span>' +
+        (ownDays ? '<button class="small ghost" data-act="pDaysInherit">' + esc(t('opt.days.inherit')) + '</button>' : '') +
       '</div>' +
     '</div>';
   }).join('');
@@ -304,6 +383,118 @@ async function savePin() {
   loadStatus();
 }
 
+// ---------- 图案解锁 ----------
+// 九宫格从左上到右下编号 1..9, 与 service.sh pat_enter 的坐标推导一一对应。
+// 画法: 按住拖过去, 或者逐格点 —— 两种都会走到同一个 patAdd()。
+// 中间格自动补: Android 把「路过但没点」的中间格算进图案, 界面也必须补,
+// 否则你在界面画 1→9, 手机端只点了两个角, 系统当成一条完全不同的线。
+function patAdd(n) {
+  n = String(n);
+  if (!/^[1-9]$/.test(n) || patSeq.indexOf(n) !== -1) return;
+  if (patSeq.length) {
+    const a = parseInt(patSeq.charAt(patSeq.length - 1), 10);
+    const b = parseInt(n, 10);
+    const dr = Math.floor((b - 1) / 3) - Math.floor((a - 1) / 3);
+    const dc = ((b - 1) % 3) - ((a - 1) % 3);
+    const jump = (Math.abs(dr) === 2 && dc === 0) ||
+                 (dr === 0 && Math.abs(dc) === 2) ||
+                 (Math.abs(dr) === 2 && Math.abs(dc) === 2);
+    if (jump) {
+      const mid = String((a + b) / 2);
+      if (patSeq.indexOf(mid) === -1) patSeq += mid;
+    }
+  }
+  patSeq += n;
+  renderPat();
+}
+
+function renderPat() {
+  const pad = $('patPad');
+  if (!pad) return;
+  pad.querySelectorAll('.patdot').forEach((el) => {
+    const n = el.dataset.n;
+    const i = patSeq.indexOf(n);
+    el.classList.toggle('on', i !== -1);
+    // 选中格显示第几步 —— 校准几何时就是靠这个对「界面点序」和「实际滑动顺序」
+    el.textContent = (i === -1) ? n : String(i + 1);
+  });
+  const svg = $('patSvg');
+  const pts = [];
+  patSeq.split('').forEach((n) => {
+    const el = pad.querySelector('.patdot[data-n="' + n + '"]');
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const s = svg.getBoundingClientRect();
+    pts.push((r.left + r.width / 2 - s.left).toFixed(1) + ',' + (r.top + r.height / 2 - s.top).toFixed(1));
+  });
+  $('patLine').setAttribute('points', pts.join(' '));
+  $('patStat').textContent = patSeq ? patSeq.split('').join('·') : t('pat.unset');
+}
+
+function patHit(x, y) {
+  const el = document.elementFromPoint(x, y);
+  if (!el || !el.closest) return null;
+  const d = el.closest('.patdot');
+  return d ? d.dataset.n : null;
+}
+
+function bindPatPad() {
+  const pad = $('patPad');
+  if (!pad) return;
+  let down = false;
+  pad.addEventListener('pointerdown', (e) => {
+    down = true;
+    try { pad.setPointerCapture(e.pointerId); } catch (err) { /* 老 WebView 不支持就按普通事件走 */ }
+    const n = patHit(e.clientX, e.clientY);
+    if (n) patAdd(n);
+    e.preventDefault();
+  });
+  pad.addEventListener('pointermove', (e) => {
+    if (!down) return;
+    const n = patHit(e.clientX, e.clientY);
+    if (n) patAdd(n);
+  });
+  const up = () => { down = false; };
+  pad.addEventListener('pointerup', up);
+  pad.addEventListener('pointercancel', up);
+  pad.addEventListener('pointerleave', up);
+}
+
+async function savePattern() {
+  if (busy) return;
+  if (patSeq.length < 4) { toastMsg(t('toast.patBad')); return; }
+  busy = true;
+  // 点序与 PIN 同规走 env, 不进命令字符串/argv
+  const r = await run('setpattern', { env: { WEBUI_PATTERN: patSeq } });
+  busy = false;
+  if (isErr(r)) { errToast(r); return; }
+  toastMsg(t('toast.patSaved'));
+  loadStatus();
+}
+
+async function clearPattern() {
+  if (busy) return;
+  patSeq = '';
+  renderPat();
+  busy = true;
+  const r = await run('setpattern', { env: { WEBUI_PATTERN: '' } });
+  busy = false;
+  if (isErr(r)) { errToast(r); return; }
+  toastMsg(t('toast.patCleared'));
+  loadStatus();
+}
+
+// 锁屏→解锁 往返测试: 服务端会先真锁一次再解锁, 用来校准图案宫格/PIN 键盘
+async function testUnlock() {
+  if (busy) return;
+  busy = true;
+  toastMsg(t('toast.unlockTesting'));
+  const r = await run('unlock');
+  busy = false;
+  if (r.indexOf('UNLOCK_OK') === 0) { toastMsg(t('toast.unlockOk')); return; }
+  errToast(r || 'no result');
+}
+
 async function toggle(key, val, okMsgOn, okMsgOff) {
   if (busy) return;
   busy = true;
@@ -327,9 +518,12 @@ async function addProfile() {
   }
   // 包名可留空：空包名是“亮屏全量录制/回放当前画面”模式。
   if (pkg && !/^[0-9A-Za-z_.]+$/.test(pkg)) { toastMsg(t('toast.pkgBad')); return; }
+  // 录制方式: 指定包名录取(原路径) / 全场录取(服务端强制空包名)
+  const scope = ($('npScope') && $('npScope').value === 'all') ? 'all' : 'pkg';
   const hhmm = ($('npTime').value || '07:30').replace(':', '');
   busy = true;
-  const r = await run("profile add '" + name + "' '" + name + "' '" + pkg + "' " + hhmm);
+  const r = await run("profile add '" + name + "' '" + name + "' '" +
+                     (scope === 'all' ? '' : pkg) + "' " + hhmm + " " + scope);
   busy = false;
   if (isErr(r)) { errToast(t('toast.addFail', { err: r })); return; }
   toastMsg(t('toast.added'));
@@ -352,7 +546,8 @@ async function onProfAct(e, evType) {
   const slug = prof.dataset.slug;
   const act = btn.dataset.act;
   // 只处理认识的动作; 像 pTime 这种纯输入框没有对应保存按钮, 直接忽略。
-  if (['pEnable', 'pCleanup', 'pScale', 'pTimeSave', 'pRun', 'pPkgSave', 'pDel', 'pRec'].indexOf(act) === -1) return;
+  if (['pEnable', 'pCleanup', 'pScale', 'pTimeSave', 'pRun', 'pPkgSave', 'pDel', 'pRec',
+       'pScope', 'pHome', 'pDay', 'pDaysInherit'].indexOf(act) === -1) return;
   if (busy && act !== 'pEnable') return;
   busy = true;
   try {
@@ -368,6 +563,32 @@ async function onProfAct(e, evType) {
       // 0 = 不缩放(默认); 1 = 回放时按录制时分辨率等比换算。
       const r = await run('profile set ' + slug + ' p_scale ' + (btn.value === '1' ? '1' : '0'));
       if (isErr(r)) { errToast(r); } else { toastMsg(t('toast.profScaleSaved')); }
+      loadProfiles();
+    } else if (act === 'pScope') {
+      // 录制方式: pkg=指定包名录取(原路径), all=全场录取(服务端会顺手清空 P_PKG)
+      const r = await run('profile set ' + slug + ' p_scope ' + btn.value);
+      if (isErr(r)) { errToast(r); } else { toastMsg(t('toast.recModeSaved')); }
+      loadProfiles();
+    } else if (act === 'pHome') {
+      // 回放前先回桌面 (只在无包名时生效)
+      const r = await run('profile set ' + slug + ' p_home ' + (btn.checked ? '1' : '0'));
+      if (isErr(r)) { errToast(r); } else { toastMsg(t('toast.pHomeSaved')); }
+    } else if (act === 'pDay') {
+      // 点一天=把那天开/关。继承全局时, 当前生效值就是全局那串, 按它算增量 ——
+      // 这样「全局是周一三五, 我只想关掉周三」点一下就成, 不必先把整周抄一遍。
+      const daybox = prof.querySelector('[data-daybox]');
+      if (!daybox) return;
+      const on = Array.prototype.map.call(daybox.querySelectorAll('button.on'), (b) => b.dataset.day);
+      const d = btn.dataset.day;
+      const next = on.indexOf(d) === -1
+        ? on.concat([d]).sort()
+        : on.filter((x) => x !== d);
+      const r = await run('profile set ' + slug + ' p_days ' + joinDays(next));
+      if (isErr(r)) { errToast(r); } else { toastMsg(t('toast.daysSaved')); }
+      loadProfiles();
+    } else if (act === 'pDaysInherit') {
+      const r = await run('profile set ' + slug + ' p_days ');
+      if (isErr(r)) { errToast(r); } else { toastMsg(t('toast.daysSaved')); }
       loadProfiles();
     } else if (act === 'pTimeSave') {
       const ti = prof.querySelector('[data-act=pTime]');
@@ -476,6 +697,10 @@ function onLangChange() {
 // ---------- 事件 ----------
 // (btnTime 的监听随 card.time 卡片一起删掉了 —— 保存时间现在走 profile 行的 pTimeSave)
 $('btnPin').addEventListener('click', savePin);
+$('btnPatSave').addEventListener('click', savePattern);
+$('btnPatClear').addEventListener('click', clearPattern);
+$('btnUnlockTest').addEventListener('click', testUnlock);
+bindPatPad();
 $('btnPAdd').addEventListener('click', addProfile);
 $('btnShow').addEventListener('click', () => {
   const p = $('pin');
@@ -495,7 +720,46 @@ $('btnFold').addEventListener('click', () => {
 $('watch').addEventListener('change', (e) => toggle('setwatch', e.target.checked ? '1' : '0', t('toast.savedOn'), t('toast.savedOff')));
 $('sleep').addEventListener('change', (e) => toggle('setsleep', e.target.checked ? '1' : '0', t('toast.savedOn'), t('toast.savedOff')));
 $('cleanup').addEventListener('change', (e) => toggle('setcleanup', e.target.checked ? '1' : '0', t('toast.cleanupSaved'), t('toast.cleanupOff')));
-$('mode').addEventListener('change', (e) => toggle('setmode', e.target.value, null, null));
+$('mode').addEventListener('change', (e) => {
+  // 先把图案画布亮出来再等保存回读: 切过去半天没反应的话, 用户会以为下拉是死的
+  $('patBox').hidden = e.target.value !== 'pattern';
+  toggle('setmode', e.target.value, null, null);
+});
+
+// 全局每周执行日 (只作用于「跟随全局」的任务)
+$('daysGlobalBtns').addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-day]');
+  if (!b || busy) return;
+  const box = $('daysGlobalBtns');
+  const on = Array.prototype.map.call(box.querySelectorAll('button.on'), (x) => x.dataset.day);
+  const d = b.dataset.day;
+  const next = on.indexOf(d) === -1 ? on.concat([d]).sort() : on.filter((x) => x !== d);
+  busy = true;
+  const r = await run('setdays ' + joinDays(next));
+  busy = false;
+  if (isErr(r)) { errToast(r); return; }
+  toastMsg(t('toast.daysSaved'));
+  loadStatus();
+});
+
+// 恢复内置工行任务 (删掉之后这个按钮才可见)
+$('btnAddIcbc').addEventListener('click', async () => {
+  if (busy) return;
+  busy = true;
+  const r = await run('profile addicbc');
+  busy = false;
+  if (isErr(r)) { errToast(r); return; }
+  toastMsg(t('toast.icbcRestored'));
+  loadStatus();
+});
+
+// 录制方式选「全场录取」时包名没有意义, 直接禁掉并清空 —— 留着一个填得进字的框,
+// 用户会以为填了会生效, 而服务端那边是强制清空的。
+$('npScope').addEventListener('change', () => {
+  const all = $('npScope').value === 'all';
+  $('npPkg').disabled = all;
+  if (all) $('npPkg').value = '';
+});
 
 $('profs').addEventListener('click', (e) => onProfAct(e, 'click'));
 $('profs').addEventListener('change', (e) => onProfAct(e, 'change'));
@@ -557,6 +821,11 @@ async function loadDevice() {
   devSet('devPY0',     d.DEV_PIN_Y0 || '1015');
   devSet('devPDX',     d.DEV_PIN_DX || '320');
   devSet('devPDY',     d.DEV_PIN_DY || '210');
+  // 图案宫格几何没有实测基线, 默认值是按 17 Pro 居中估算的, 供用户校准后覆盖
+  devSet('devPaX0',    d.DEV_PAT_X0 || '270');
+  devSet('devPaY0',    d.DEV_PAT_Y0 || '1000');
+  devSet('devPaDX',    d.DEV_PAT_DX || '340');
+  devSet('devPaDY',    d.DEV_PAT_DY || '340');
   devRenderBadge(d);
 }
 
@@ -623,7 +892,9 @@ async function devSave() {
   const bad = [];
   const need = [['devSW','dev.sw',300],['devSH','dev.sh',300],['devD','dev.d',0],
                 ['devDPI','dev.dpi',0],['devPX0','dev.pin',1],['devPY0','dev.pin',1],
-                ['devPDX','dev.pin',1],['devPDY','dev.pin',1]];
+                ['devPDX','dev.pin',1],['devPDY','dev.pin',1],
+                ['devPaX0','dev.pat',1],['devPaY0','dev.pat',1],
+                ['devPaDX','dev.pat',1],['devPaDY','dev.pat',1]];
   for (const [id, key, min] of need) {
     const v = ($(id) ? $(id).value : '').trim();
     if (v === '') continue;                       // 留空 = 保留原值
@@ -651,7 +922,8 @@ async function devSave() {
   if (label) args.push('DEV_LABEL=' + label);
   args.push('DEV_STATUS=' + (isPro ? 'stable' : 'testing'));
   const nums = [['devSW','DEV_SW'],['devSH','DEV_SH'],['devD','DEV_D'],['devDPI','DEV_DPI'],
-                ['devPX0','DEV_PIN_X0'],['devPY0','DEV_PIN_Y0'],['devPDX','DEV_PIN_DX'],['devPDY','DEV_PIN_DY']];
+                ['devPX0','DEV_PIN_X0'],['devPY0','DEV_PIN_Y0'],['devPDX','DEV_PIN_DX'],['devPDY','DEV_PIN_DY'],
+                ['devPaX0','DEV_PAT_X0'],['devPaY0','DEV_PAT_Y0'],['devPaDX','DEV_PAT_DX'],['devPaDY','DEV_PAT_DY']];
   for (const [id, key] of nums) {
     const v = ($(id) ? $(id).value : '').trim();
     if (v !== '') args.push(key + '=' + v);

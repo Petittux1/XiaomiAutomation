@@ -1,12 +1,16 @@
 #!/system/bin/sh
-# icbc_daily_water / webctl.sh v0.10.0 - WebUI 助手 (由 KSU 管理器 WebView 以 root 调用)
-# 用法: webctl.sh status|setpin|settime|setenable|setmode|setopen|setsleep|setwatch|setcleanup|
-#        trigger[NAME]|restart|log|profiles|profile add/del/set|record start/stop/status
+# icbc_daily_water / webctl.sh v0.13.0 - WebUI 助手 (由 KSU 管理器 WebView 以 root 调用)
+# 用法: webctl.sh status|setpin|setpattern|settime|setdays|setenable|setmode|setopen|
+#        setsleep|setwatch|setcleanup|unlock|trigger[NAME]|restart|log|profiles|
+#        profile add/addicbc/del/set|record start/stop/status|device get|set|detect
 M=/data/adb/modules/icbc_daily_water
 CFG=/data/adb/icbc_water/sched.conf
 LOG=$M/log.txt
+BASE=/data/adb/icbc_water
 PFX=/data/adb/icbc_water/profiles
 REC=$M/record.sh
+# 内置工行任务的「用户已删除」标记: 有它就绝不重建(service.sh / customize.sh 都认)
+NOICBC=$BASE/no_icbc
 # 清理上次异常中断留下的配置临时文件；正式 PIN 只保存在 CFG。
 rm -f "$CFG".tmp.* "$CFG".pin.* 2>/dev/null
 cleanup_cfg_tmp() { rm -f "$CFG".tmp.* "$CFG".pin.* 2>/dev/null; }
@@ -42,12 +46,48 @@ setval() {  # setval KEY VALUE  (值经调用方白名单校验)
     echo "ERR write config"
     exit 1
   fi
-  # PIN 只回显“已设置”，绝不能把明文带回 WebUI/API 或 shell 输出。
+  # PIN/图案只回显“已设置”，绝不能把明文带回 WebUI/API 或 shell 输出。
+  # 图案是一串 1-9 的点序, 与 PIN 同等敏感 —— 泄露等于直接给出解锁方式。
   if [ "$K" = "PIN" ]; then
     echo "SET PIN=已设置"
+  elif [ "$K" = "PATTERN" ]; then
+    if [ -n "$V" ]; then echo "SET PATTERN=已设置"; else echo "SET PATTERN="; fi
   else
     echo "SET $K=$V"
   fi
+}
+
+# 每周执行日取值: 空(继承全局) / 单个 0(一天都不跑) / 1-7 严格递增无重复。
+# 与 service.sh 的 days_shape 同一套规则, 两边都认才不会出现「界面存得下、调度不认」。
+daysok() {
+  [ -z "$1" ] && return 0
+  [ "$1" = "0" ] && return 0
+  case "$1" in *[!1-7]*) return 1;; esac
+  DK=$1; DPV=0; DI=1
+  while [ $DI -le ${#DK} ]; do
+    DCV=$(printf '%s' "$DK" | cut -c $DI)
+    [ "$DCV" -le "$DPV" ] && return 1
+    DPV=$DCV
+    DI=$((DI+1))
+  done
+  return 0
+}
+
+# 图案点序: 1-9 的数字, 长度 4-9, 不能重复 (Android 宫格最多 9 个点且每点只过一次)。
+# 空值合法, 表示清除图案。
+patternok() {
+  [ -z "$1" ] && return 0
+  case "$1" in *[!1-9]*) return 1;; esac
+  [ ${#1} -lt 4 ] && return 1
+  [ ${#1} -gt 9 ] && return 1
+  PK=$1
+  while [ -n "$PK" ]; do
+    PC=$(printf '%s' "$PK" | cut -c1)
+    PRE=$(printf '%s' "$PK" | cut -c2-)
+    case "$PRE" in *"$PC"*) return 1;; esac
+    PK=$PRE
+  done
+  return 0
 }
 
 # HHMM → 当日分钟数 (防前导0八进制坑, 非法值返回0)
@@ -155,6 +195,7 @@ prof_line() {
   CD=$1
   PN=$(basename "$CD")
   P_NAME=; P_TYPE=; P_PKG=; P_SCHED=; P_ENABLE=; P_CLEANUP=; P_SCALE=
+  P_DAYS=; P_SCOPE=; P_HOME=
   [ -f $CD/conf ] && . $CD/conf 2>/dev/null
   T0=$(date +%Y%m%d)
   PD=no
@@ -164,7 +205,8 @@ prof_line() {
   PACTS=0
   # sw@DUR 是新格式; 同时兼容旧 sw 空格格式
   [ -f $CD/actions.rx ] && PACTS=$(grep -cE '^W[0-9]+ (tap|sw@[0-9]+|sw)($| )' $CD/actions.rx 2>/dev/null)
-  echo "profile=$PN pname=${P_NAME:-$PN} ptype=${P_TYPE:-script} ppkg=${P_PKG:-} psched=${P_SCHED:-} penable=${P_ENABLE:-} pcleanup=${P_CLEANUP:-} pscale=${P_SCALE:-0} pdone=$PD ptry=$PTRY pacts=${PACTS:-0}"
+  # pdays 空 = 跟随全局 SCHED_DAYS; pscope 空/ pkg = 指定包名录取, all = 全场录取
+  echo "profile=$PN pname=${P_NAME:-$PN} ptype=${P_TYPE:-script} ppkg=${P_PKG:-} psched=${P_SCHED:-} penable=${P_ENABLE:-} pcleanup=${P_CLEANUP:-} pscale=${P_SCALE:-0} pdone=$PD ptry=$PTRY pacts=${PACTS:-0} pdays=${P_DAYS:-} pscope=${P_SCOPE:-pkg} phome=${P_HOME:-1}"
 }
 
 list_profiles() {
@@ -215,7 +257,8 @@ dev_get() {
   DEV_ON=0
   if [ -f "$DEV_FILE" ]; then
     for DK in DEV_APPLY DEV_MODEL DEV_LABEL DEV_STATUS DEV_SW DEV_SH DEV_D DEV_DPI \
-              DEV_PIN_X0 DEV_PIN_Y0 DEV_PIN_DX DEV_PIN_DY; do
+              DEV_PIN_X0 DEV_PIN_Y0 DEV_PIN_DX DEV_PIN_DY \
+              DEV_PAT_X0 DEV_PAT_Y0 DEV_PAT_DX DEV_PAT_DY; do
       DV=$(dev_read "$DK")
       [ -n "$DV" ] && echo "$DK=$DV"
     done
@@ -244,7 +287,8 @@ dev_set() {
     case "$DK" in
       DEV_APPLY)
         case "$DV" in 0|1) DS_APPLY=$DV; DS_PEND="$DS_PEND $DK=$DV";; *) echo "ERR apply 0/1"; exit 1;; esac ;;
-      DEV_SW|DEV_SH|DEV_D|DEV_DPI|DEV_PIN_X0|DEV_PIN_Y0|DEV_PIN_DX|DEV_PIN_DY)
+      DEV_SW|DEV_SH|DEV_D|DEV_DPI|DEV_PIN_X0|DEV_PIN_Y0|DEV_PIN_DX|DEV_PIN_DY|\
+      DEV_PAT_X0|DEV_PAT_Y0|DEV_PAT_DX|DEV_PAT_DY)
         # 纯数字, 且不超长(防溢出); DEV_D 允许 0
         case "$DV" in
           ''|*[!0-9]*) echo "ERR $DK 必须是纯数字"; exit 1;;
@@ -272,7 +316,8 @@ dev_set() {
     atomic_update "$DEV_FILE" DEV_MODEL 17pro
     atomic_update "$DEV_FILE" DEV_STATUS stable
     [ -n "$(dev_read DEV_LABEL)" ] || atomic_update "$DEV_FILE" DEV_LABEL Xiaomi_17_Pro
-    for DCK in DEV_SW DEV_SH DEV_D DEV_DPI DEV_PIN_X0 DEV_PIN_Y0 DEV_PIN_DX DEV_PIN_DY; do
+    for DCK in DEV_SW DEV_SH DEV_D DEV_DPI DEV_PIN_X0 DEV_PIN_Y0 DEV_PIN_DX DEV_PIN_DY \
+               DEV_PAT_X0 DEV_PAT_Y0 DEV_PAT_DX DEV_PAT_DY; do
       dev_clear "$DCK"
     done
   fi
@@ -338,6 +383,8 @@ case "$1" in
     ICT=0
     [ -f $PFX/icbc/try.txt ] && ICT=$(cat $PFX/icbc/try.txt 2>/dev/null)
     echo "fail_times: $ICT"
+    # 内置工行任务在不在 (用户可能已删除): 界面据此决定要不要显示「恢复内置工行」
+    if [ -f $PFX/icbc/conf ]; then echo "icbc_present=yes"; else echo "icbc_present=no"; fi
     if [ -f $CFG ]; then . $CFG; fi
     NOWT=$(date +%H%M)
     LAST=0
@@ -355,17 +402,28 @@ case "$1" in
     if [ $SCHEDM_A -gt 1380 ] && [ $NOWM_A -le $((SCHEDM_A + 60 - 1440)) ]; then W=1; fi
     if [ $W -eq 1 ]; then echo "window_ok=yes"; else echo "window_ok=no"; fi
     if [ "$IDONE" = "yes" ]; then echo "done_ok=yes"; else echo "done_ok=no"; fi
+    # 今天是不是执行日 (全局 SCHED_DAYS; 单个任务的 P_DAYS 各自看 profile 行)
+    DOW=$(date +%u 2>/dev/null)
+    DLIST=${SCHED_DAYS:-1234567}
+    DAYOK=yes
+    case "$DLIST" in
+      ''|0) [ -n "$DLIST" ] && DAYOK=no;;
+      *) case "$DLIST" in *"$DOW"*) :;; *) DAYOK=no;; esac;;
+    esac
+    echo "day=$DOW day_ok=$DAYOK sched_days=${DLIST}"
     echo "=== Profiles ==="
     list_profiles
     echo "=== 配置 ==="
-    # 状态接口也必须脱敏 PIN；WebUI 不应能通过 stdout 读到明文。
+    # 状态接口也必须脱敏 PIN 与图案点序；WebUI 不应能通过 stdout 读到明文。
+    # 两条敏感键都在这一处统一替换成「已设置」/空, 不留第二条输出通道。
     if [ -f $CFG ]; then
       PINSET=$(sed -n 's/^PIN=//p' $CFG 2>/dev/null | head -1)
-      if [ -n "$PINSET" ]; then
-        sed 's/^PIN=.*/PIN=已设置/' $CFG 2>/dev/null
-      else
-        sed 's/^PIN=.*/PIN=/' $CFG 2>/dev/null
-      fi
+      PATSET=$(sed -n 's/^PATTERN=//p' $CFG 2>/dev/null | head -1)
+      awk -v pinset="$PINSET" -v patset="$PATSET" '
+        /^PIN=/    { print (pinset == "" ? "PIN=" : "PIN=已设置"); next }
+        /^PATTERN=/{ print (patset == "" ? "PATTERN=" : "PATTERN=已设置"); next }
+        { print }
+      ' "$CFG" 2>/dev/null
     fi
     ;;
   setpin)
@@ -379,6 +437,22 @@ case "$1" in
     if [ ${#V} -lt 4 ] || [ ${#V} -gt 8 ]; then echo "ERR pin length 4-8"; exit 1; fi
     setval PIN "$V"
     unset WEBUI_PIN V
+    ;;
+  setpattern)
+    # 图案点序走 env 通道 (WEBUI_PATTERN), 与 PIN 同规: 不进命令字符串/进程参数。
+    # 清空 = 取消图案解锁 (回到 PIN 或上滑)。
+    V=$WEBUI_PATTERN
+    unset WEBUI_PATTERN
+    V=$(printf '%s' "$V" | tr -d ' \t')
+    patternok "$V" || { echo "ERR pattern must be 4-9 distinct digits 1-9 (or empty to clear)"; exit 1; }
+    setval PATTERN "$V"
+    unset V
+    ;;
+  setdays)
+    # 全局执行日: 空/0/升序 1-7 串。0 = 一周都不跑(定时整体停摆, 手动触发不受影响)
+    V=$(printf '%s' "$2" | tr -d ' \t')
+    daysok "$V" || { echo "ERR days 空=每天, 0=不跑, 或 1-7 升序串如 135"; exit 1; }
+    setval SCHED_DAYS "$V"
     ;;
   settime)
     V=$(printf '%s' "$2" | tr -d ' \t')
@@ -408,7 +482,7 @@ case "$1" in
     case "$2" in 1|0) setval SCHED_ENABLE "$2";; *) echo "ERR enable 0/1"; exit 1;; esac
     ;;
   setmode)
-    case "$2" in pin|swipe) setval UNLOCK_MODE "$2";; *) echo "ERR mode pin|swipe"; exit 1;; esac
+    case "$2" in pin|swipe|pattern) setval UNLOCK_MODE "$2";; *) echo "ERR mode pin|swipe|pattern"; exit 1;; esac
     ;;
   setopen)
     case "$2" in monkey|am) setval OPEN_MODE "$2";; *) echo "ERR open monkey|am"; exit 1;; esac
@@ -429,11 +503,17 @@ case "$1" in
     SUB=$2
     case "$SUB" in
       add)
-        # profile add SLUG NAME PKG [SCHED]  (录制型新 profile)
-        SLUG=$3; NAME=$4; PKG=$5; SCHED=$6
+        # profile add SLUG NAME PKG [SCHED] [SCOPE]  (录制型新 profile; SCOPE=pkg|all)
+        SLUG=$3; NAME=$4; PKG=$5; SCHED=$6; SCOPE=$7
         slugok "$SLUG" || { echo "ERR slug 仅字母数字_横线中文,<=24位"; exit 1; }
         nameok "$NAME" || { echo "ERR name 仅允许中文/字母数字/下划线/横线，<=32位"; exit 1; }
         pkgok "$PKG" || { echo "ERR pkg 仅允许字母数字下划线点，或留空"; exit 1; }
+        # 录制方式: pkg=指定包名录取(核心路径, 原样保留) / all=全场录取(不绑定包名)
+        case "$SCOPE" in
+          ''|pkg) SCOPE=pkg;;
+          all)    SCOPE=all; PKG=;;
+          *)      echo "ERR scope pkg|all"; exit 1;;
+        esac
         if [ -d $PFX/$SLUG ]; then echo "ERR profile $SLUG exists"; exit 1; fi
         if [ -n "$SCHED" ]; then
           case "$SCHED" in ''|*[!0-9]*) echo "ERR sched HHMM"; exit 1;; esac
@@ -447,6 +527,7 @@ case "$1" in
           echo P_NAME=$NAME
           echo P_TYPE=record
           echo P_PKG=$PKG
+          echo P_SCOPE=$SCOPE
           [ -n "$SCHED" ] && echo P_SCHED=$SCHED
         } > "$CT" ); then
           echo "ERR write profile"
@@ -460,16 +541,46 @@ case "$1" in
         fi
         echo "PROFILE_ADD $SLUG"
         ;;
+      addicbc)
+        # 恢复内置工行任务 (用户删掉后的一键找回)。
+        # 必须先撤掉 no_icbc 标记: 只重建目录不撤标记的话, 下次开机 ensure_profiles
+        # 会认为「用户要求不要它」而把它跳过, 恢复按钮就成了只成功一次的假动作。
+        if [ -f $PFX/icbc/conf ]; then echo "ERR 内置工行任务已存在"; exit 1; fi
+        rm -f "$NOICBC" 2>/dev/null
+        mkdir -p $PFX/icbc 2>/dev/null || { echo "ERR mkdir icbc"; exit 1; }
+        IST=$(sed -n 's/^SCHED_TIME=//p' "$CFG" 2>/dev/null | head -1)
+        CT=$PFX/icbc/conf.tmp.$$
+        if ! ( umask 077; {
+          echo P_NAME=工行定时浇水
+          echo P_TYPE=script
+          echo P_PKG=com.icbc
+          [ -n "$IST" ] && echo P_SCHED=$IST
+        } > "$CT" ); then
+          echo "ERR write icbc profile"
+          exit 1
+        fi
+        chmod 600 "$CT" 2>/dev/null
+        if ! mv "$CT" "$PFX/icbc/conf" 2>/dev/null; then
+          rm -f "$CT" 2>/dev/null
+          echo "ERR write icbc profile"
+          exit 1
+        fi
+        echo "PROFILE_ADD icbc"
+        ;;
       del)
         SLUG=$3
-        [ "$SLUG" = "icbc" ] && { echo "ERR 内置工行任务不可删"; exit 1; }
         slugok "$SLUG" || { echo "ERR slug"; exit 1; }
         [ -d $PFX/$SLUG ] || { echo "ERR no profile $SLUG"; exit 1; }
+        # 内置工行任务也允许删 —— 别的用户不一定用得上它。删掉就立标记,
+        # 否则 service.sh 每次开机 / customize.sh 每次安装都会把它重建回来。
+        if [ "$SLUG" = "icbc" ]; then
+          ( umask 077; : > "$NOICBC" ) 2>/dev/null || { echo "ERR write no_icbc"; exit 1; }
+        fi
         rm -rf $PFX/$SLUG
         echo "PROFILE_DEL $SLUG"
         ;;
       set)
-        # profile set SLUG KEY VALUE  KEY: p_name|p_pkg|p_sched|p_enable|p_cleanup|p_scale  (写 conf 大写 P_ 字段)
+        # profile set SLUG KEY VALUE  KEY: p_name|p_pkg|p_sched|p_enable|p_cleanup|p_scale|p_days|p_scope|p_home
         SLUG=$3; KEY=$4; VAL=$5
         slugok "$SLUG" || { echo "ERR slug"; exit 1; }
         [ -f $PFX/$SLUG/conf ] || { echo "ERR no profile $SLUG"; exit 1; }
@@ -480,6 +591,21 @@ case "$1" in
           p_pkg) KEY=P_PKG
             # 空值 = 清空 (亮屏即录)
             pkgok "$VAL" || { echo "ERR pkg 仅允许字母数字下划线点，或留空"; exit 1; }
+            ;;
+          p_days) KEY=P_DAYS
+            # 空值 = 跟随全局 SCHED_DAYS; 0 = 该任务一周都不跑; 否则是升序 1-7 串
+            daysok "$VAL" || { echo "ERR days 空=跟随全局, 0=不跑, 或 1-7 升序串如 135"; exit 1; }
+            ;;
+          p_scope) KEY=P_SCOPE
+            # pkg = 指定包名录取(默认) / all = 全场录取(回放不绑定包名, 必须清空 P_PKG)
+            case "$VAL" in
+              pkg|all) ;;
+              *) echo "ERR scope pkg|all"; exit 1;;
+            esac
+            ;;
+          p_home) KEY=P_HOME
+            # 回放前先回桌面; 只在无包名(全场录取/裸录)时生效, 默认 1
+            case "$VAL" in 1|0) ;; *) echo "ERR home 0/1"; exit 1;; esac
             ;;
           p_sched) KEY=P_SCHED
             [ -n "$VAL" ] || { echo "ERR sched HHMM"; exit 1; }
@@ -506,11 +632,27 @@ case "$1" in
               *) echo "ERR scale 0/1"; exit 1;;
             esac
             ;;
-          *) echo "ERR key p_name|p_pkg|p_sched|p_enable|p_cleanup|p_scale"; exit 1;;
+          *) echo "ERR key p_name|p_pkg|p_sched|p_enable|p_cleanup|p_scale|p_days|p_scope|p_home"; exit 1;;
         esac
         if ! atomic_update "$PFX/$SLUG/conf" "$KEY" "$VAL"; then
           echo "ERR write profile"
           exit 1
+        fi
+        # 两个键互相牵制, 单写一个会让 profile 自相矛盾:
+        #   p_scope=all 必须同时把包名清掉 —— 否则回放先去打开包名, 全场录的动作全错位;
+        #   给了非空包名就必须退回 pkg 模式 —— 用户改填包名就是想走指定包名录取。
+        if [ "$KEY" = "P_SCOPE" ] && [ "$VAL" = "all" ]; then
+          if ! atomic_update "$PFX/$SLUG/conf" P_PKG ""; then
+            echo "ERR clear P_PKG"
+            exit 1
+          fi
+          echo "SET P_PKG="
+        elif [ "$KEY" = "P_PKG" ] && [ -n "$VAL" ]; then
+          CUR=$(sed -n 's/^P_SCOPE=//p' "$PFX/$SLUG/conf" 2>/dev/null | head -1)
+          if [ "$CUR" = "all" ]; then
+            atomic_update "$PFX/$SLUG/conf" P_SCOPE pkg || { echo "ERR write P_SCOPE"; exit 1; }
+            echo "SET P_SCOPE=pkg"
+          fi
         fi
         echo "SET $KEY=$VAL"
         ;;
@@ -553,6 +695,30 @@ case "$1" in
       : > $M/now.txt 2>/dev/null && echo "TRIGGERED" || { echo "ERR write now.txt"; exit 1; }
     fi
     ;;
+  unlock)
+    # 锁屏->解锁 往返测试 (校准图案宫格/PIN 键盘用): 由 service.sh 一次性处理。
+    # 先确认守护在跑, 否则 unlock.txt 会一直没人消费, 界面只能干等到超时。
+    pgrep -f "$M/service.sh" >/dev/null 2>&1 || { echo "ERR service not running"; exit 1; }
+    rm -f $M/unlock.out 2>/dev/null
+    echo 1 > $M/unlock.txt 2>/dev/null || { echo "ERR touch unlock.txt"; exit 1; }
+    UWI=0
+    while [ $UWI -lt 30 ]; do
+      [ -f $M/unlock.out ] && break
+      sleep 1
+      UWI=$((UWI+1))
+    done
+    if [ -f $M/unlock.out ]; then
+      URES=$(cat $M/unlock.out 2>/dev/null)
+      rm -f $M/unlock.out $M/unlock.txt 2>/dev/null
+      case "$URES" in
+        UNLOCK_OK*) echo "UNLOCK_OK";;
+        *) echo "ERR unlock failed (${URES:-no result})";;
+      esac
+    else
+      rm -f $M/unlock.txt 2>/dev/null
+      echo "ERR unlock test timed out"
+    fi
+    ;;
   restart)
     restart_svc
     ;;
@@ -567,7 +733,7 @@ case "$1" in
     tail -60 $LOG 2>/dev/null || echo "(no log yet)"
     ;;
   *)
-    echo "usage: webctl.sh status|setpin|settime|setenable|setmode|setopen|setsleep|setwatch|setcleanup|trigger[NAME]|restart|log|profiles|profile add/del/set|record start/stop/status|device get|set|detect"
+    echo "usage: webctl.sh status|setpin|setpattern|settime|setdays|setenable|setmode|setopen|setsleep|setwatch|setcleanup|unlock|trigger[NAME]|restart|log|profiles|profile add/addicbc/del/set|record start/stop/status|device get|set|detect"
     ;;
 esac
 exit 0

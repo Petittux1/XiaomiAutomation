@@ -17,12 +17,16 @@ Il fonctionne par **contrôle root direct** (`screencap` / `getevent` / `sendeve
 
 - Un profil intégré « Arrosage ICBC quotidien » s'exécute chaque jour à `07:30` par défaut ; il peut aussi être déclenché manuellement, ainsi qu'à la première ouverture d'ICBC de la journée.
 - Planification indépendante par profil : chaque tâche a son propre horaire, son activation, son package cible et sa séquence d'actions.
+- **Choix des jours de la semaine** : la planification globale et chaque tâche portent sept boutons lun–dim, pour activer jour par jour. Une tâche sans jour coché suit le réglage global ; `0` signifie aucune exécution programmée cette semaine (les déclenchements manuels restent possibles).
 - Enregistrement lié à une application : l'enregistrement démarre dès que vous basculez vers l'application cible, se met en pause quand vous quittez et reprend à votre retour ; il se met aussi en pause sur écran verrouillé ou éteint.
+- **Mode « tout enregistrer »** : en passant le mode d'enregistrement sur « Tout enregistrer », une tâche sans package continue d'enregistrer d'une application à l'autre en partant de l'écran d'accueil ; la relecture revient d'abord à l'écran d'accueil par défaut, pour démarrer toujours au même endroit. Le mode lié au package d'origine est inchangé.
 - Enregistrement « nu » : avec un nom de package vide, il enregistre depuis l'écran allumé, en filtrant les balayages de bord et du bas selon des règles.
+- **Déverrouillage par motif** : la liste des méthodes de déverrouillage gagne « Motif » — dessinez votre motif de 4 à 9 points sur le pavé à neuf points du WebUI, et le module le rejoue en glissant avant chaque exécution. Les coordonnées sont réglables par appareil, et un bouton d'essai aller-retour « verrouillage → déverrouillage » sert au calibrage.
+- **La tâche intégrée peut être supprimée puis restaurée** : la tâche « Arrosage ICBC quotidien » peut maintenant être retirée du WebUI ; une fois supprimée, elle n'est plus recréée au redémarrage ni à la mise à jour. Le bouton « Restaurer la tâche ICBC intégrée » la recrache à la demande.
 - À la relecture, le module gère le réveil de l'écran, le déverrouillage, le lancement de l'application cible et la confirmation du premier plan, puis restaure le verrouillage d'orientation, le maintien d'éveil et le délai d'extinction.
 - **Nettoyage de l'arrière-plan après chaque exécution** : l'application cible est fermée avec `am force-stop` à la fin de la tâche, afin qu'elle ne retienne plus de mémoire et que la tâche suivante démarre dans un état propre. Un interrupteur global, plus une surcharge par tâche.
 - **WebUI multilingue** : chinois / English / Français / Русский, sélectionnable en haut à droite ; le choix est mémorisé.
-- **Prise en charge de plusieurs appareils** : une couche de profil d'appareil permet d'ajuster par modèle la taille de l'écran, l'ID d'affichage et la disposition du pavé numérique de l'écran de verrouillage, afin que l'enregistrement, la relecture et le déverrouillage PIN fonctionnent aussi sur d'autres téléphones HyperOS 4. La base mesurée du Xiaomi 17 Pro est conservée telle quelle et n'est pas affectée.
+- **Prise en charge de plusieurs appareils** : une couche de profil d'appareil permet d'ajuster par modèle la taille de l'écran, l'ID d'affichage, la disposition du pavé numérique de l'écran de verrouillage et la grille du motif, afin que l'enregistrement, la relecture et le déverrouillage PIN / motif fonctionnent aussi sur d'autres téléphones HyperOS 4. La base mesurée du Xiaomi 17 Pro est conservée telle quelle et n'est pas affectée.
 - **Le WebUI se met à jour avec le module** : les ressources portent une version, la mise en cache est désactivée, et la page vérifie d'elle-même si le document est périmé puis le recharge — plus besoin de désinstaller puis réinstaller après une mise à jour.
 - **Une interface plus aérée** : un résumé d'état en haut, tout le détail rangé dans des sections repliables, pour que le premier écran ne soit plus un mur de formulaire ; tout déplier / tout replier en un geste.
 - Le code PIN n'est écrit que dans la configuration locale et n'apparaît jamais dans l'état, le journal ni le code source.
@@ -46,19 +50,25 @@ Magisk est la seule exception : le code amont de Magisk ne contient **aucun code
 
 Dans tous les environnements, vous pouvez piloter le même backend depuis un shell root via `webctl.sh` :
 
-```shsu -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh status'
+```sh
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh status'
 su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh settime 0730'
 su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh trigger'      # lance immédiatement la tâche intégrée
 su -c 'WEBUI_PIN=123456 sh /data/adb/modules/icbc_daily_water/webctl.sh setpin'
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh setdays 1234567'   # tous les jours ; 135 = lun/mer/ven, 0 = rien de programmé
+su -c 'WEBUI_PATTERN=14789 sh /data/adb/modules/icbc_daily_water/webctl.sh setpattern'  # enregistre le motif ; sans valeur, on l'efface
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh unlock'       # essai aller-retour verrouillage → déverrouillage (calibrage motif / PIN)
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh profile del icbc'   # supprime la tâche ICBC intégrée (marqueur no_icbc, plus jamais recréée)
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh profile addicbc'    # restaure la tâche ICBC intégrée
 ```
 
-Le code PIN n'est Deliberément accepté **que via la variable d'environnement `WEBUI_PIN`**, jamais en argument de ligne de commande, afin que le texte en clair n'apparaisse jamais dans la liste des processus. Tapez cette dernière ligne à la main dans un terminal local — ne la mettez ni dans un script, ni dans un alias, ni dans une discussion.
+Le code PIN n'est délibérément accepté **que via la variable d'environnement `WEBUI_PIN`**, jamais en argument de ligne de commande, afin que le texte en clair n'apparaisse jamais dans la liste des processus. Le motif suit la même règle via `WEBUI_PATTERN` : 4 à 9 chiffres distincts `1–9`, et une valeur vide efface le motif. Tapez ces lignes à la main dans un terminal local — ne les mettez ni dans un script, ni dans un alias, ni dans une discussion.
 
-La liste complète des sous-commandes figure en en-tête du fichier : `webctl.sh status|setpin|settime|setenable|setmode|setopen|setsleep|setwatch|setcleanup|trigger[NAME]|restart|log|profiles|profile add/del/set|record start/stop/status`.
+La liste complète des sous-commandes figure en en-tête du fichier : `webctl.sh status|setpin|setpattern|settime|setdays|setenable|setmode|setopen|setsleep|setwatch|setcleanup|unlock|trigger[NAME]|restart|log|profiles|profile add/addicbc/del/set|record start/stop/status`.
 
 ## Installation
 
-1. Téléchargez `XiaomiAutomation-v0.12.10.zip` depuis les Releases.
+1. Téléchargez `XiaomiAutomation-v0.13.0.zip` depuis les Releases.
 2. Flashez ce zip dans KernelSU / Magisk.
 3. Redémarrez, ouvrez le WebUI du module et réglez la méthode de déverrouillage et le code PIN selon vos besoins.
 4. Pour une tâche enregistrée, renseignez le nom de package de l'application cible ; basculez vers cette application et appuyez sur « Démarrer l'enregistrement », puis sur « Arrêter l'enregistrement » lorsque vous avez terminé.
@@ -75,7 +85,7 @@ id=icbc_daily_water
 
 Ne supprimez pas ces répertoires et ne modifiez pas l'identifiant du module ; votre configuration, vos profils, votre code PIN et vos actions enregistrées sont conservés.
 
-> Si le WebUI semble encore obsolète après la mise à jour, vérifiez la version en haut à droite : elle doit indiquer `v0.12.4`. Sinon, l'ancien paquet a été installé.
+> Si le WebUI semble encore obsolète après la mise à jour, vérifiez la version en haut à droite : elle doit indiquer `v0.13.0`. Sinon, l'ancien paquet a été installé.
 
 ## Utilisation
 
@@ -83,14 +93,25 @@ Ne supprimez pas ces répertoires et ne modifiez pas l'identifiant du module ; v
 
 La tâche « Arrosage ICBC quotidien » est créée à la première installation. C'est un profil script qui appelle le `water.sh` intégré, lequel effectue la vérification de la page d'accueil d'ICBC, appuie sur l'entrée de la tâche et déroule le processus d'arrosage. L'horaire par défaut est `07:30` et peut être modifié dans le WebUI.
 
+La tâche intégrée peut maintenant être **supprimée** : le bouton « Supprimer » de sa carte fonctionne comme sur n'importe quelle autre tâche. La suppression écrit le marqueur `/data/adb/icbc_water/no_icbc`, que ni le daemon au démarrage ni une mise à jour ne recréeront la tâche. Pour la ramener, appuyez sur « Restaurer la tâche ICBC intégrée » (ou lancez `webctl.sh profile addicbc`) : elle est recréée avec l'horaire global actuel et le marqueur est effacé — supprimer et restaurer reste possible autant de fois que voulu.
+
+### Choisir les jours d'exécution
+
+- La rangée **Jours d'exécution globaux** dans « ⚙️ Autres » est une série de boutons lun–dim. Les sept allumés = chaque jour (valeur par défaut) ; éteindre un jour bloque toutes les tâches programmées ce jour-là.
+- Chaque carte de tâche a sa propre rangée **Jours d'exécution**, par défaut « Suivre le réglage global ». Cochez-la et la tâche ne s'exécute que les jours choisis, indépendamment de la rangée globale.
+- Valeurs : vide = suivre le réglage global (global vide = tous les jours), `0` = aucune exécution programmée cette semaine, sinon une chaîne croissante `1-7` (`135` = lun / mer / ven).
+- « ▶ Exécuter » ignore les jours d'exécution et fonctionne toujours ; le chemin « première ouverture d'ICBC de la journée » ne se déclenche que les jours d'exécution.
+
 ### Tâches enregistrées
 
-1. Ajoutez une tâche dans le WebUI avec un nom et un package cible ; laisser le package vide enregistre tout l'écran allumé.
+1. Ajoutez une tâche dans le WebUI avec un nom, puis choisissez un **mode d'enregistrement** :
+   - **Enregistrement lié au package** (par défaut) : renseignez le package de l'application cible ; l'enregistrement démarre dès que vous basculez vers elle, se met en pause quand vous quittez et reprend à votre retour.
+   - **Tout enregistrer** : laissez le package vide et passez le mode sur « Tout enregistrer » ; l'enregistrement démarre depuis l'écran d'accueil et continue d'une application à l'autre sans pause. La relecture revient d'abord à l'écran d'accueil par défaut, pour toujours démarrer au même endroit.
 2. Appuyez sur « Démarrer l'enregistrement » sur la tâche, puis basculez vers l'application cible.
 3. Revenez au WebUI et appuyez sur « Arrêter l'enregistrement ».
 4. Vérifiez le nombre d'actions, puis lancez-la immédiatement ou attendez son horaire.
 
-Pour capturer les gestes de retour par le bord, renseignez le package cible : le mode lié à l'application conserve les balayages de bord et ignore les effectués dans d'autres applications.
+Pour capturer les gestes de retour par le bord, utilisez le mode lié au package avec le package cible renseigné : ce mode conserve les balayages de bord et ignore les effectués dans d'autres applications.
 
 ### Nettoyage de l'arrière-plan
 
@@ -105,7 +126,9 @@ Deux cas particuliers à connaître :
 
 ### Écran de verrouillage et alimentation
 
-Avant une tâche, le module tente de réveiller et de déverrouiller l'écran, soit par saisie aveugle du code PIN, soit par balayage vers le haut. Il maintient l'écran allumé pendant l'exécution puis restaure le verrouillage d'orientation, `screen_off_timeout` et le maintien d'éveil d'origine. Si l'état de verrouillage ne peut pas être confirmé, il abandonne en toute sécurité au lieu d'injecter des coordonnées à l'aveugle.
+Avant une tâche, le module tente de réveiller et de déverrouiller l'écran, soit par saisie aveugle du code PIN, soit en rejouant votre motif, soit par balayage vers le haut. Il maintient l'écran allumé pendant l'exécution puis restaure le verrouillage d'orientation, `screen_off_timeout` et le maintien d'éveil d'origine. Si l'état de verrouillage ne peut pas être confirmé, il abandonne en toute sécurité au lieu d'injecter des coordonnées à l'aveugle.
+
+**Déverrouillage par motif** : choisissez « Motif » comme méthode, puis dessinez 4 à 9 points distincts sur le pavé à neuf points du WebUI (glissez pour les relier ; le « point intermédiaire » qu'Android accepte est complété automatiquement) et enregistrez. Le motif reste dans la configuration locale — l'interface n'affiche jamais que « défini », jamais l'ordre des points. Le pavé utilise par défaut des coordonnées estimées pour le Xiaomi 17 Pro ; sur un autre téléphone, ajustez `PAT_X0` / `PAT_Y0` (premier point, en haut à gauche) et `PAT_DX` / `PAT_DY` (espacement) dans la carte « 📱 Profil d'appareil », puis appuyez sur le bouton d'essai « verrouillage → déverrouillage » : un succès affiche `UNLOCK_OK`, sinon corrigez les quatre valeurs et réessayez. Sans motif, le module revient au PIN ou au balayage.
 
 ### Langue
 
@@ -117,10 +140,11 @@ L'appareil cible par défaut est le Xiaomi 17 Pro. Le module détecte l'appareil
 
 ### Changer de téléphone : le profil d'appareil
 
-La carte « 📱 Profil d'appareil » agit sur exactement trois choses : **la largeur et la hauteur de l'écran, l'ID d'affichage et la disposition du pavé numérique de l'écran de verrouillage**. Ce sont ces valeurs qui déterminent si l'enregistrement, la relecture et le déverrouillage PIN fonctionnent ; elles diffèrent sur les autres téléphones et demandent donc leurs propres valeurs.
+La carte « 📱 Profil d'appareil » agit sur les éléments suivants : **la largeur et la hauteur de l'écran, l'ID d'affichage, la disposition du pavé numérique de l'écran de verrouillage et la grille du motif à neuf points**. Ce sont ces valeurs qui déterminent si l'enregistrement, la relecture et le déverrouillage PIN / motif fonctionnent ; elles diffèrent sur les autres téléphones et demandent donc leurs propres valeurs.
 
 - **Xiaomi 17 Pro** : la carte contient déjà les valeurs mesurées — **n'y touchez pas**. Laissez « Activer le remplacement » désactivé et le module utilise les valeurs d'origine de `water.sh` / `sched.conf`.
 - **Autres modèles HyperOS 4** (Xiaomi 17, 17 Pro Max, …) : appuyez sur « 🔍 Détecter ce téléphone » pour remplir `wm size` et `wm density`, vérifiez les valeurs, puis cochez « Activer le remplacement » et enregistrez. Le pavé numérique de l'écran de verrouillage ne peut pas être détecté de façon fiable : remplissez-le à la main — sinon les valeurs du 17 Pro sont utilisées et les mauvais chiffres sont tapés.
+- **Grille du motif** : `PAT_X0` / `PAT_Y0` est la position en pixels du premier point (en haut à gauche) et `PAT_DX` / `PAT_DY` l'espacement horizontal / vertical (défauts `270 / 1000 / 340 / 340`, estimés pour le 17 Pro). Vérifiez avec le bouton d'essai « verrouillage → déverrouillage » : si ce ne sont pas les bonnes cases qui sont tracées, ajustez ces quatre valeurs et réessayez jusqu'à `UNLOCK_OK`.
 - Le profil se trouve dans `/data/adb/icbc_water/device.conf`. `DEV_APPLY=0` (par défaut) signifie « pas de remplacement, on utilise la base du 17 Pro » ; seul `DEV_APPLY=1` active le remplacement. Chaque valeur doit passer un contrôle « unique + chiffres uniquement » : une erreur ou un fichier corrompu laisse au pire le remplacement inactif — il ne peut pas casser le processus d'arrosage.
 
 > **Tous les modèles autres que le Xiaomi 17 Pro sont « en test ».** La résolution, le DPI et la hauteur des barres système influencent la mise en page de l'interface, par conséquent : **le parcours ICBC n'est pas garanti** ; mais **l'enregistrement, la relecture et le déverrouillage PIN fonctionnent normalement**. Ne l'essayez pas sur votre téléphone principal.
@@ -166,7 +190,7 @@ bash tools/build_zip.sh
 Le script écrit le fichier suivant dans le répertoire parent :
 
 ```text
-XiaomiAutomation-v0.12.10.zip
+XiaomiAutomation-v0.13.0.zip
 ```
 
 ## Licence

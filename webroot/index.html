@@ -176,6 +176,35 @@
   .pill.warn { color: var(--warn); border-color: #6b4a12; }
   .rec-on { color: #f87171; font-weight: 700; }
 
+  /* ---------- 每周执行日 ---------- */
+  .daysrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: var(--gap); }
+  .daysrow .dl { font-size: 11px; color: var(--mut); flex: none; }
+  .daybtns { display: flex; gap: 5px; flex-wrap: wrap; }
+  .daybtns button {
+    padding: 6px 0; width: 34px; font-size: 12px; text-align: center;
+    border-radius: 8px; color: var(--mut);
+  }
+  .daybtns button.on { background: var(--acc); border-color: var(--acc); color: #fff; font-weight: 700; }
+  /* 跟随全局时用虚线边框区分: 「亮着」不等于「本任务自己定的」 */
+  .daybtns button.inherit { border-style: dashed; }
+
+  /* ---------- 图案九宫格 ---------- */
+  .patpad {
+    position: relative; width: 246px; height: 246px; margin: 10px auto 4px;
+    display: grid; grid-template-columns: repeat(3, 1fr); place-items: center;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    background: #0f141c; border: 1px solid var(--line); border-radius: 16px;
+  }
+  .patpad .patdot {
+    width: 46px; height: 46px; border-radius: 50%; padding: 0;
+    background: var(--card2); border: 2px solid var(--line); color: var(--mut);
+    font-size: 13px; font-weight: 700; line-height: 1; cursor: pointer;
+  }
+  .patpad .patdot.on { background: var(--acc); border-color: var(--acc); color: #fff; }
+  .patsvg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #patLine { fill: none; stroke: var(--acc); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; opacity: .75; }
+  .patseq { font-variant-numeric: tabular-nums; }
+
   footer { max-width: 560px; margin: 18px auto 0; text-align: center; font-size: 11px; color: var(--mut); }
 </style>
 </head>
@@ -228,13 +257,30 @@
       <!-- 原 card.time.hint 的内容, 随卡片一起去重搬过来: 说清「到点之后会发生什么」
            以及为什么默认 07:30, 这两条信息本身是对的, 不该跟着卡片一起被删掉。 -->
       <p class="hint" data-i18n="prof.schedHint"></p>
+      <!-- 全局执行日: 只作用于「跟随全局」的任务; 单个任务在它自己的卡片里覆盖 -->
+      <div class="daysrow">
+        <span class="dl" data-i18n="lbl.days">每周执行日</span>
+        <div class="daybtns" id="daysGlobalBtns"></div>
+      </div>
+      <p class="fldcap" data-i18n="days.hint"></p>
       <div id="profs"></div>
+      <!-- 内置工行任务删掉后才出现: 有它在, 这个按钮点了也是「已存在」 -->
+      <div class="row" id="icbcRow" hidden>
+        <button id="btnAddIcbc" class="ghost flex1" data-i18n="btn.addIcbc">恢复内置工行任务</button>
+      </div>
       <p class="fldcap" data-i18n="scale.hint"></p>
       <p class="fldcap" data-i18n="prof.new"></p>
       <div class="grid2">
         <input type="text" id="npName" data-i18n-ph="ph.npName" placeholder="新任务名" class="flex1">
         <input type="text" id="npPkg" data-i18n-ph="ph.npPkg" placeholder="包名" class="flex1">
       </div>
+      <label class="fld" style="margin-top:var(--gap)"><span data-i18n="lbl.recMode">录制方式</span>
+        <select id="npScope">
+          <option value="pkg" data-i18n="opt.rec.pkg">指定包名录取</option>
+          <option value="all" data-i18n="opt.rec.all">全场录取（不填包名）</option>
+        </select>
+      </label>
+      <p class="fldcap" data-i18n="prof.recModeHint"></p>
       <div class="row">
         <input type="time" id="npTime" value="07:30" style="flex:none;width:116px">
         <button id="btnPAdd" class="primary flex1" data-i18n="btn.add">＋ 新增</button>
@@ -254,9 +300,35 @@
       <label class="sw"><span data-i18n="lbl.unlockMode">解锁方式</span>
         <select id="mode" style="flex:none;width:auto">
           <option value="pin" data-i18n="opt.pin">PIN 盲打解锁</option>
+          <option value="pattern" data-i18n="opt.pattern">图案解锁（九宫格）</option>
           <option value="swipe" data-i18n="opt.swipe">上滑解锁（无密码）</option>
         </select>
       </label>
+      <!-- 图案在这里提前画好, 到点由服务端按点序一笔画完 —— 不需要读屏识别图案 -->
+      <div id="patBox" hidden>
+        <p class="fldcap" data-i18n="card.pat.hint"></p>
+        <div class="patpad" id="patPad">
+          <svg class="patsvg" id="patSvg" aria-hidden="true"><polyline id="patLine" points=""></polyline></svg>
+          <button type="button" class="patdot" data-n="1">1</button>
+          <button type="button" class="patdot" data-n="2">2</button>
+          <button type="button" class="patdot" data-n="3">3</button>
+          <button type="button" class="patdot" data-n="4">4</button>
+          <button type="button" class="patdot" data-n="5">5</button>
+          <button type="button" class="patdot" data-n="6">6</button>
+          <button type="button" class="patdot" data-n="7">7</button>
+          <button type="button" class="patdot" data-n="8">8</button>
+          <button type="button" class="patdot" data-n="9">9</button>
+        </div>
+        <div class="row">
+          <span class="pill patseq flex1" id="patStat" data-i18n="pat.unset">未画</span>
+          <button id="btnPatClear" class="ghost" data-i18n="btn.patClear">清除</button>
+          <button id="btnPatSave" class="primary" data-i18n="btn.patSave">保存图案</button>
+        </div>
+      </div>
+      <div class="row">
+        <button id="btnUnlockTest" class="ghost flex1" data-i18n="btn.unlockTest">🔒 测试解锁（锁屏→解锁）</button>
+      </div>
+      <p class="fldcap" data-i18n="unlock.test.hint"></p>
     </div>
   </details>
 
@@ -293,6 +365,13 @@
         <input type="number" id="devPY0" min="1" step="1" aria-label="Y0">
         <input type="number" id="devPDX" min="1" step="1" aria-label="DX">
         <input type="number" id="devPDY" min="1" step="1" aria-label="DY">
+      </div>
+      <p class="fldcap" data-i18n="dev.pat">锁屏图案宫格</p>
+      <div class="grid4">
+        <input type="number" id="devPaX0" min="1" step="1" aria-label="PX0">
+        <input type="number" id="devPaY0" min="1" step="1" aria-label="PY0">
+        <input type="number" id="devPaDX" min="1" step="1" aria-label="PDX">
+        <input type="number" id="devPaDY" min="1" step="1" aria-label="PDY">
       </div>
     </div>
   </details>

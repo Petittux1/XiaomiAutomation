@@ -30,8 +30,10 @@ fi
 chmod 600 $DEVCFG 2>/dev/null
 
 # Profiles 目录 + 内置工行脚本型 profile (防重装后丢失)
+# 例外: 用户在 WebUI 里删掉内置工行任务后会留下 no_icbc 标记, 那次删除是明确意愿,
+# 升级/重刷不得把它又装回来 —— 否则"能删掉"就是假的。标记不删, 这里一个字节都不写。
 mkdir -p $PFX 2>/dev/null
-if [ ! -f $PFX/icbc/conf ]; then
+if [ ! -f $CFGDIR/no_icbc ] && [ ! -f $PFX/icbc/conf ]; then
   mkdir -p $PFX/icbc 2>/dev/null
   {
     echo P_NAME=工行定时浇水
@@ -39,6 +41,9 @@ if [ ! -f $PFX/icbc/conf ]; then
     echo P_PKG=com.icbc
     echo P_SCHED=$(grep -m1 '^SCHED_TIME=' $CFG 2>/dev/null | cut -d= -f2)
   } > $PFX/icbc/conf 2>/dev/null
+fi
+if [ -f $CFGDIR/no_icbc ]; then
+  echo "- 已按用户设置跳过内置工行任务 (no_icbc 标记存在)"
 fi
 
 # ---------- WebUI 完整性校验 ----------

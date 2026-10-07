@@ -34,12 +34,16 @@
 
 - 内置「工行定时浇水」Profile，默认每天 `07:30` 执行；支持手动触发和每日首次打开工行时触发。
 - 多 Profile 独立调度：每个任务可设置时间、启用状态、目标包名和操作序列。
+- **可选周几执行**：全局和每个任务都有周一到周日 7 个开关，哪天跑哪天不跑逐个勾选；单任务不勾则跟随全局，勾 `0` 即一周都不定时跑（手动触发不受影响）。
 - 目标 App 录制模式：切到目标 App 后开始录制，离开自动暂停，回到目标 App 继续；锁屏或暗屏时也会暂停。
+- **全场录取模式**：录制方式选「全场录取」后不填包名也能跨 App 连续录完整操作（先回桌面再开录），回放前同样默认先回桌面；原「指定包名录取」路径原样保留。
 - 裸录模式：包名留空时从亮屏画面开始录制；按规则过滤系统边缘/底部滑动。
+- **图案密码解锁**：解锁方式新增「图案」，在 WebUI 九宫格上直接画出 4-9 点图案，任务执行前按该图案拖拽解锁；坐标可在设备档案里按机型微调，另有「锁屏→解锁」往返测试按钮用于校准。
+- **内置任务可删可恢复**：内置「工行定时浇水」任务现在可以在 WebUI 里直接删除，删除后重启/重装也不会被重建；任务卡上的「恢复内置工行任务」可随时一键重建。
 - 回放时自动处理亮屏、锁屏解锁、目标 App 打开与前台确认，并恢复方向锁、常亮和屏幕超时设置。
 - **跑完清理后台**：任务结束后自动 `am force-stop` 目标 App 回收内存，下次任务从干净状态开始；可全局开关，也可按任务单独覆盖。
 - **多语言 WebUI**：中文 / English / Français / Русский，页面右上角可切换，选择会记住。
-- **多设备适配**：内置设备档案层，可按机型调整屏幕尺寸、显示 ID 和锁屏密码宫格位置，让录制、回放和 PIN 自动解锁也能在别的澎湃 4 机型上用；Xiaomi 17 Pro 的实测基线原样保留、不受任何影响。
+- **多设备适配**：内置设备档案层，可按机型调整屏幕尺寸、显示 ID、锁屏密码宫格位置和图案解锁坐标，让录制、回放和 PIN / 图案自动解锁也能在别的澎湃 4 机型上用；Xiaomi 17 Pro 的实测基线原样保留、不受任何影响。
 - **WebUI 升级即生效**：资源带版本号并禁用缓存，页面还会自检「文档是不是旧的」并自动重载 —— 模块更新后不再需要卸载重装。
 - **界面清爽**：概览区一眼看状态，细节收进可折叠分组，首屏不再是一大坨表单；「展开全部 / 收起全部」一键切换。
 - PIN 只写入本机配置，不在状态接口、运行日志或源码中出现明文。
@@ -63,19 +67,25 @@ Magisk 是唯一的例外：上游 Magisk 里**一行 WebView 代码都没有**�
 
 任何环境下想改配置，都可以用 root shell 直接调 `webctl.sh`（与 WebUI 完全同一套后端）：
 
-```shsu -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh status'
+```sh
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh status'
 su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh settime 0730'
 su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh trigger'      # 立刻跑一次内置任务
 su -c 'WEBUI_PIN=123456 sh /data/adb/modules/icbc_daily_water/webctl.sh setpin'
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh setdays 1234567'   # 每天都跑；135=只跑周一三五，0=一周都不定时跑
+su -c 'WEBUI_PATTERN=14789 sh /data/adb/modules/icbc_daily_water/webctl.sh setpattern'  # 画好图案后保存；不带值即清除
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh unlock'       # 锁屏→解锁 往返测试（校准图案/PIN 用）
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh profile del icbc'   # 删除内置工行任务（记入 no_icbc，不再重建）
+su -c 'sh /data/adb/modules/icbc_daily_water/webctl.sh profile addicbc'    # 恢复内置工行任务
 ```
 
-PIN 刻意**只接受环境变量 `WEBUI_PIN`**，不接受命令行参数，这样明文不会出现在进程列表里。上面这条请在本地终端手敲，不要写进脚本、别名或聊天记录。
+PIN 刻意**只接受环境变量 `WEBUI_PIN`**，不接受命令行参数，这样明文不会出现在进程列表里。图案同理，走 `WEBUI_PATTERN`，点序是 4-9 个互不重复的 `1-9`，空值表示清除图案。上面这几条请在本地终端手敲，不要写进脚本、别名或聊天记录。
 
-完整子命令见文件头注释：`webctl.sh status|setpin|settime|setenable|setmode|setopen|setsleep|setwatch|setcleanup|trigger[NAME]|restart|log|profiles|profile add/del/set|record start/stop/status`。
+完整子命令见文件头注释：`webctl.sh status|setpin|setpattern|settime|setdays|setenable|setmode|setopen|setsleep|setwatch|setcleanup|unlock|trigger[NAME]|restart|log|profiles|profile add/addicbc/del/set|record start/stop/status`。
 
 ## 安装
 
-1. 从 Releases 下载 `XiaomiAutomation-v0.12.10.zip`。
+1. 从 Releases 下载 `XiaomiAutomation-v0.13.0.zip`。
 2. 在 KernelSU / Magisk 中刷入该 zip。
 3. 重启设备后打开模块 WebUI，按需设置解锁方式和 PIN。
 4. 首次使用录制任务时，填写目标 App 包名；切到该 App 后点击「开始录制」，操作完成后点击「停止录制」。
@@ -92,7 +102,7 @@ id=icbc_daily_water
 
 请不要手动删除这些目录或修改模块 ID；配置、Profile、PIN 和录制动作会继续沿用。
 
-> 如果升级后 WebUI 仍显示旧界面，打开模块 WebUI 确认右上角版本号是否为 `v0.12.4`；若不是，说明装的是旧包。
+> 如果升级后 WebUI 仍显示旧界面，打开模块 WebUI 确认右上角版本号是否为 `v0.13.0`；若不是，说明装的是旧包。
 
 ## 使用说明
 
@@ -100,14 +110,25 @@ id=icbc_daily_water
 
 首次安装会自动创建「工行定时浇水」任务。它是脚本型 Profile，调用内置 `water.sh` 完成工行首页判断、任务入口点击和浇水流程。默认定时为 `07:30`，可以在 WebUI 中修改。
 
+内置任务现在**可以删除**：任务卡右下角的「删除」对它同样有效，删除后写入 `/data/adb/icbc_water/no_icbc` 标记，开机守护和升级安装都不会再把它建回来。想恢复时点「恢复内置工行任务」按钮（或执行 `webctl.sh profile addicbc`）即可按当前全局时间重新创建；恢复后标记自动清除，后续删除/恢复可以反复进行。
+
+### 定时可选周几
+
+- 「⚙️ 其它」里的**全局执行日**是一排周一到周日的按钮，全开即每天执行（默认），关掉的日子不会触发任何定时任务。
+- 每个任务卡上还有**该任务自己的执行日**，默认「跟随全局」；单独勾选后只按自己勾的日子跑，与全局互不影响。
+- 取值规则：空 = 跟随全局（全局空 = 每天），`0` = 一天都不跑，其余为 `1-7` 的升序串（`135` = 周一/三/五）。
+- 手动「▶ 运行」不受执行日限制，任何时候都会执行；「每日首次打开工行」那条链路同样只在执行日生效。
+
 ### 录制任务
 
-1. 在 WebUI 中新增任务，填写任务名和目标 App 包名；包名留空表示亮屏全量录制。
+1. 在 WebUI 中新增任务，填写任务名；**录制方式**二选一：
+   - **指定包名录取**（默认）：填写目标 App 包名，切到该 App 后开始录制，离开自动暂停，回到目标 App 继续。
+   - **全场录取**：包名留空并把录制方式切到「全场录取」，从桌面开始跨 App 连续录制整套操作，中途切换 App 不中断；回放前默认先回一次桌面，保证起点一致。
 2. 点击任务的「开始录制」，切换到目标 App。
 3. 完成操作后回到 WebUI，点击「停止录制」。
 4. 确认动作数量后，可立即运行或等待该 Profile 的定时时间。
 
-要录制左右边缘返回手势，请填写目标包名；App 绑定模式会保留边缘返回，普通离开 App 的动作会被丢弃。
+要录制左右边缘返回手势，请选择「指定包名录取」并填写目标包名；App 绑定模式会保留边缘返回，普通离开 App 的动作会被丢弃。
 
 ### 跑完清理后台
 
@@ -122,7 +143,9 @@ id=icbc_daily_water
 
 ### 锁屏与电源
 
-任务执行前会尝试亮屏并解锁，支持 PIN 盲打或上滑解锁。执行期间会临时保持常亮，结束后恢复原来的方向锁、`screen_off_timeout` 和常亮设置。锁屏状态无法确认时会安全中止，不会盲目注入坐标。
+任务执行前会尝试亮屏并解锁，支持 PIN 盲打、图案解锁或上滑解锁。执行期间会临时保持常亮，结束后恢复原来的方向锁、`screen_off_timeout` 和常亮设置。锁屏状态无法确认时会安全中止，不会盲目注入坐标。
+
+**图案解锁**：解锁方式选「图案」后，在 WebUI 的九宫格上按顺序点出 4-9 个互不重复的点（支持拖拽连画，Android 允许的「中间格补全」会自动补上），保存即可。图案只存在本机配置里，接口回显一律是「已设置」，不会带出点序。九宫格坐标默认按 Xiaomi 17 Pro 估算，别的机型在「📱 设备档案」里微调 `PAT_X0/PAT_Y0/PAT_DX/PAT_DY`（起点 X/Y 与横纵间距）；改完点「锁屏→解锁 测试」跑一次往返，成功会回 `UNLOCK_OK`，失败看日志再调。没有设置图案时自动回落到 PIN 或上滑。
 
 ### 语言
 
@@ -134,10 +157,11 @@ WebUI 右上角的下拉可切换中文 / English / Français / Русussian（�
 
 ### 换机器用：设备档案
 
-「📱 设备档案」卡片只影响三样东西：**屏幕宽高、显示 ID、锁屏密码宫格位置**。这三个值直接决定录制、回放和 PIN 自动解锁能不能正常工作，别的机器和 17 Pro 不一样，所以要单独填。
+「📱 设备档案」卡片只影响几样东西：**屏幕宽高、显示 ID、锁屏密码宫格位置，以及图案解锁的九宫格坐标**。这些值直接决定录制、回放和 PIN / 图案自动解锁能不能正常工作，别的机器和 17 Pro 不一样，所以要单独填。
 
 - **Xiaomi 17 Pro**：卡片默认就是这套已实测的值，**不需要改动**。「启用覆盖」保持关闭，模块用的就是 `water.sh` / `sched.conf` 里的原值。
 - **其它澎湃 4 机型**（小米 17 / 17 Pro Max 等）：点「🔍 自动检测本机」自动填入 `wm size` 和 `wm density` 的值，核对无误后勾上「启用覆盖」再保存。锁屏密码宫格无法自动可靠识别，需要手动填 —— 不填就用 17 Pro 的值，别的机器上会点错格子。
+- **图案解锁坐标**：`PAT_X0` / `PAT_Y0` 是九宫格左上角第一个点的像素坐标，`PAT_DX` / `PAT_DY` 是横纵间距（默认 `270 / 1000 / 340 / 340`，按 17 Pro 估算）。用任务卡或「⚙️ 其它」里的「锁屏→解锁 测试」验证：点错格子就微调这四个值再测，直到回 `UNLOCK_OK`。
 - 设备档案存放在 `/data/adb/icbc_water/device.conf`。`DEV_APPLY=0`（默认）表示「不覆盖，按 17 Pro 基线走」；只有 `DEV_APPLY=1` 才启用覆盖。所有数值都要通过「唯一 + 纯数字」校验，填错或文件损坏最多让覆盖不生效，不会把浇水流程带歪。
 
 > **除 Xiaomi 17 Pro 外，其它机型均为「测试中」状态。** 分辨率、DPI、系统导航栏高度都会影响 UI 布局，所以：**工行流程不保证可用**；但**录制、回放、PIN 自动解锁等基础功能是可以正常使用的**。请勿在主力机上直接使用。
@@ -183,7 +207,7 @@ bash tools/build_zip.sh
 脚本会在仓库父目录生成：
 
 ```text
-XiaomiAutomation-v0.12.10.zip
+XiaomiAutomation-v0.13.0.zip
 ```
 
 ## 许可证
