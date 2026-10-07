@@ -65,6 +65,14 @@ grep -qE "^const BUILD_VC = '${VC}';$" "$STAGE/webroot/app.js" || {
   echo "构建失败: app.js 的 BUILD_VC 注入未生效" >&2; exit 1; }
 grep -qE "^const BUILD_VER = '${VER}';$" "$STAGE/webroot/app.js" || {
   echo "构建失败: app.js 的 BUILD_VER 注入未生效" >&2; exit 1; }
+# index.html 的版本角标同样注入, 它是「桥没给出 version」时的兜底显示。
+# 源码态那里写死过 v0.12.0, 于是卸载重装多少遍角标都停在 12.0 —— 占位符化之后
+# 写死值进不了包, 且会被下面那条「webroot 不允许残留占位符」的检查兜住。
+grep -qF '<span id="ver">__BUILD_VER__</span>' "$ROOT/webroot/index.html" || {
+  echo "构建失败: index.html 的 #ver 缺少 __BUILD_VER__ 占位符(不要写死版本号)" >&2; exit 1; }
+sed -i "s#<span id=\"ver\">__BUILD_VER__</span>#<span id=\"ver\">${VER}</span>#" "$STAGE/webroot/index.html"
+grep -qF "<span id=\"ver\">${VER}</span>" "$STAGE/webroot/index.html" || {
+  echo "构建失败: index.html 的版本角标注入未生效" >&2; exit 1; }
 # 除声明行外不允许再有裸占位符: app.js 里的「源码态」判据必须原样保留
 n_left=$(grep -c '__BUILD_VC__' "$STAGE/webroot/app.js" || true)
 [ "$n_left" = "0" ] || {

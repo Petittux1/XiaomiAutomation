@@ -15,7 +15,6 @@ const STORE_KEY = 'icbcauto.webui.lang';
 
 const zh = {
   'app.title': '💧 澎湃自动化 · Xiaomi 17 Pro',
-  'app.loading': '…',
   'app.nobridge': '⚠️ 未检测到 root 管理器接口',
   'app.nobridge.hint': '这个页面要靠 root 管理器打开：所有操作都通过管理器注入的 root 接口执行命令，直接用浏览器打开拿不到任何权限，页面上的报错都是这个原因。',
   'app.nobridge.fix': '请回到管理器里，从模块列表点开本模块的 WebUI。Magisk 用户请先装 KsuWebUI 或 MMRL —— 两者注入的是同一个接口，本模块不用改任何东西就能用；KernelSU / APatch 及其分支（KernelSU Next、SukiSU Ultra）在管理器里直接打开即可。命令行用户改用 webctl.sh，功能完全一样。',
@@ -24,8 +23,6 @@ const zh = {
   'btn.show': '显示',
   'btn.hide': '隐藏',
   'btn.add': '＋ 新增',
-  'btn.refresh': '刷新状态',
-  'btn.restart': '重启服务',
   'btn.logRefresh': '刷新',
   'btn.savePkg': '存',
   'btn.del': '删',
@@ -65,8 +62,6 @@ const zh = {
   'ph.npPkg': '包名（可留空：亮屏全量录）',
   'ph.pkgUnset': '未设(亮屏即录)',
 
-  'st.todayDone': '今日已浇 ✅',
-  'st.todayPending': '今日未浇',
   'st.svcRun': '运行中',
   'st.svcStop': '已停止',
   'st.on': '开',
@@ -120,7 +115,6 @@ const zh = {
   'toast.recStopped': '录制已停止',
   'toast.recNoApp': '还没识别到目标 app（请确认已切到该 app 操作）',
   'toast.recStart': '开始录制！切到目标 app 才会开录，离开自动暂停，操作完点「停止录制」',
-  'toast.svcRestarted': '服务已重启',
   'toast.cleanupSaved': '后台清理已开启',
   'toast.cleanupOff': '后台清理已关闭',
   'toast.profCleanupSaved': '该任务的清理设置已保存',
@@ -157,9 +151,6 @@ const zh = {
 
 
   // v0.12.0 界面重构: 概览区 / 折叠分组 / 键名标签
-  'hero.hint': '到点自动：亮屏 → 解锁 → 跑任务 → 熄屏。下面各项按需展开，改完即时生效。',
-  'ui.collapse': '收起全部',
-  'ui.expand': '展开全部',
   'prof.new': '新增任务：脚本型任务（工行定时浇水）是内置的；这里新建的都是录制型。',
   'dev.hint.short': '默认就是 17 Pro 的实测值，别改。换机器时点「自动检测」填好再勾选「启用覆盖」。',
   'card.log.hint': '最近 60 行',
@@ -211,7 +202,6 @@ const zh = {
 
 const en = {
   'app.title': '💧 XiaomiAutomation · Xiaomi 17 Pro',
-  'app.loading': '…',
   'app.nobridge': '⚠️ No root manager interface detected',
   'app.nobridge.hint': 'This page has to be opened by a root manager: every action runs a command through the root interface the manager injects. Opened in a plain browser it gets no privileges at all, which is what the errors on this page mean.',
   'app.nobridge.fix': 'Go back to your manager and open this module\u2019s WebUI from the module list. On Magisk, install KsuWebUI or MMRL first \u2014 both inject the same interface, so this module needs no changes at all; on KernelSU / APatch and their forks (KernelSU Next, SukiSU Ultra) just open it in the manager. From a root shell, use webctl.sh instead \u2014 it does exactly the same thing.',
@@ -220,8 +210,6 @@ const en = {
   'btn.show': 'Show',
   'btn.hide': 'Hide',
   'btn.add': '＋ Add',
-  'btn.refresh': 'Refresh',
-  'btn.restart': 'Restart service',
   'btn.logRefresh': 'Refresh',
   'btn.savePkg': 'Set',
   'btn.del': 'Del',
@@ -261,8 +249,6 @@ const en = {
   'ph.npPkg': 'Package name (empty = record the whole screen)',
   'ph.pkgUnset': 'not set (records a lit screen)',
 
-  'st.todayDone': 'Done today ✅',
-  'st.todayPending': 'Not watered today',
   'st.svcRun': 'running',
   'st.svcStop': 'stopped',
   'st.on': 'on',
@@ -316,7 +302,6 @@ const en = {
   'toast.recStopped': 'Recording stopped',
   'toast.recNoApp': 'Target app not detected yet (make sure you switched to that app)',
   'toast.recStart': 'Recording! Switch to the target app to start — it pauses when you leave; press "Stop recording" when done',
-  'toast.svcRestarted': 'Service restarted',
   'toast.cleanupSaved': 'Background cleanup enabled',
   'toast.cleanupOff': 'Background cleanup disabled',
   'toast.profCleanupSaved': 'Cleanup setting saved for this task',
@@ -353,9 +338,6 @@ const en = {
 
 
   // v0.12.0 界面重构: 概览区 / 折叠分组 / 键名标签
-  'hero.hint': 'On schedule it wakes, unlocks, runs the tasks and turns the screen back off. Expand the sections below as needed — changes take effect immediately.',
-  'ui.collapse': 'Collapse all',
-  'ui.expand': 'Expand all',
   'prof.new': 'Add a task: script tasks (the built-in ICBC watering) are provided; anything you create here is a recorded one.',
   'dev.hint.short': 'The defaults are the measured 17 Pro values — do not change them. On another phone press “Auto-detect this phone”, check the numbers, then tick “Enable override”.',
   'card.log.hint': 'Last 60 lines',
@@ -407,7 +389,6 @@ const en = {
 
 const fr = {
   'app.title': '💧 XiaomiAutomation · Xiaomi 17 Pro',
-  'app.loading': '…',
   'app.nobridge': '⚠️ Aucune interface du gestionnaire root détectée',
   'app.nobridge.hint': 'Cette page doit être ouverte par un gestionnaire root : chaque action exécute une commande via l\u2019interface root injectée par le gestionnaire. Ouverte dans un simple navigateur, elle n\u2019a aucun privilège \u2014 c\u2019est la cause des messages d\u2019erreur affichés.',
   'app.nobridge.fix': 'Revenez à votre gestionnaire et ouvrez le WebUI du module depuis la liste. Sur Magisk, installez d\u2019abord KsuWebUI ou MMRL : les deux injectent la même interface, ce module n\u2019a donc aucune modification à faire ; sur KernelSU / APatch et leurs forks (KernelSU Next, SukiSU Ultra), ouvrez-le directement dans le gestionnaire. Depuis un shell root, utilisez webctl.sh \u2014 c\u2019est exactement équivalent.',
@@ -416,8 +397,6 @@ const fr = {
   'btn.show': 'Afficher',
   'btn.hide': 'Masquer',
   'btn.add': '＋ Ajouter',
-  'btn.refresh': 'Actualiser',
-  'btn.restart': 'Redémarrer le service',
   'btn.logRefresh': 'Actualiser',
   'btn.savePkg': 'OK',
   'btn.del': 'Suppr.',
@@ -457,8 +436,6 @@ const fr = {
   'ph.npPkg': 'Nom de package (vide = enregistrer tout l\'écran)',
   'ph.pkgUnset': 'non défini (enregistre l\'écran allumé)',
 
-  'st.todayDone': 'Fait aujourd\'hui ✅',
-  'st.todayPending': 'Pas encore arrosé aujourd\'hui',
   'st.svcRun': 'en cours',
   'st.svcStop': 'arrêté',
   'st.on': 'activé',
@@ -512,7 +489,6 @@ const fr = {
   'toast.recStopped': 'Enregistrement arrêté',
   'toast.recNoApp': 'Application cible non détectée (assurez-vous d\'être sur cette application)',
   'toast.recStart': 'Enregistrement ! Basculez vers l\'application cible pour démarrer — cela se met en pause si vous quittez ; appuyez sur « Arrêter l\'enregistrement » une fois terminé',
-  'toast.svcRestarted': 'Service redémarré',
   'toast.cleanupSaved': 'Nettoyage en arrière-plan activé',
   'toast.cleanupOff': 'Nettoyage en arrière-plan désactivé',
   'toast.profCleanupSaved': 'Réglage de nettoyage enregistré pour cette tâche',
@@ -549,9 +525,6 @@ const fr = {
 
 
   // v0.12.0 界面重构: 概览区 / 折叠分组 / 键名标签
-  'hero.hint': 'À l\'heure prévue, le module réveille l\'écran, déverrouille, exécute les tâches puis l\'éteint. Dépliez les sections ci-dessous au besoin — les modifications sont immédiatement effectives.',
-  'ui.collapse': 'Tout replier',
-  'ui.expand': 'Tout déplier',
   'prof.new': 'Ajouter une tâche : les tâches script (l\'arrosage ICBC intégré) sont fournies ; tout ce que vous créez ici est une tâche enregistrée.',
   'dev.hint.short': 'Les valeurs par défaut sont celles mesurées sur le 17 Pro — ne les modifiez pas. Sur un autre téléphone, appuyez sur « Détecter ce téléphone », vérifiez les valeurs, puis cochez « Activer le remplacement ».',
   'card.log.hint': '60 dernières lignes',
@@ -603,7 +576,6 @@ const fr = {
 
 const ru = {
   'app.title': '💧 XiaomiAutomation · Xiaomi 17 Pro',
-  'app.loading': '…',
   'app.nobridge': '⚠️ Не обнаружен интерфейс root-менеджера',
   'app.nobridge.hint': 'Эту страницу должен открывать root-менеджер: каждое действие выполняет команду через интерфейс root, который внедряет менеджер. В обычном браузере прав нет вообще — именно поэтому на странице и появляются ошибки.',
   'app.nobridge.fix': 'Вернитесь в менеджер и откройте WebUI модуля из списка модулей. На Magisk сначала установите KsuWebUI или MMRL — оба внедряют тот же интерфейс, поэтому модуль менять не нужно; на KernelSU / APatch и их форках (KernelSU Next, SukiSU Ultra) просто откройте его в менеджере. Из root-оболочки используйте webctl.sh — он делает ровно то же самое.',
@@ -612,8 +584,6 @@ const ru = {
   'btn.show': 'Показать',
   'btn.hide': 'Скрыть',
   'btn.add': '＋ Добавить',
-  'btn.refresh': 'Обновить',
-  'btn.restart': 'Перезапустить службу',
   'btn.logRefresh': 'Обновить',
   'btn.savePkg': 'ОК',
   'btn.del': 'Удалить',
@@ -653,8 +623,6 @@ const ru = {
   'ph.npPkg': 'Имя пакета (пусто = запись всего экрана)',
   'ph.pkgUnset': 'не задан (пишет включённый экран)',
 
-  'st.todayDone': 'Сегодня выполнено ✅',
-  'st.todayPending': 'Сегодня ещё не полито',
   'st.svcRun': 'работает',
   'st.svcStop': 'остановлена',
   'st.on': 'вкл.',
@@ -708,7 +676,6 @@ const ru = {
   'toast.recStopped': 'Запись остановлена',
   'toast.recNoApp': 'Целевое приложение не найдено (убедитесь, что вы перешли в него)',
   'toast.recStart': 'Идёт запись! Перейдите в целевое приложение; при выходе запись приостановится; по завершении нажмите «Остановить запись»',
-  'toast.svcRestarted': 'Служба перезапущена',
   'toast.cleanupSaved': 'Очистка фона включена',
   'toast.cleanupOff': 'Очистка фона отключена',
   'toast.profCleanupSaved': 'Настройка очистки для этой задачи сохранена',
@@ -745,9 +712,6 @@ const ru = {
 
 
   // v0.12.0 界面重构: 概览区 / 折叠分组 / 键名标签
-  'hero.hint': 'По расписанию модуль будит экран, разблокирует, выполняет задачи и гасит экран. Разверните разделы ниже по мере надобности — изменения вступают в силу сразу.',
-  'ui.collapse': 'Свернуть всё',
-  'ui.expand': 'Развернуть всё',
   'prof.new': 'Добавить задачу: скриптовые задачи (встроенный полив ICBC) уже есть; всё, что вы создадите здесь, — записываемые.',
   'dev.hint.short': 'По умолчанию стоят измеренные значения 17 Pro — не меняйте их. На другом телефоне нажмите «Определить этот телефон», проверьте значения, затем поставьте «Включить переопределение».',
   'card.log.hint': 'Последние 60 строк',

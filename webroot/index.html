@@ -27,25 +27,11 @@
        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #lang { flex: none; width: auto; padding: 7px 8px; font-size: 12px; border-radius: 9px; }
 
-  /* ---------- 概览区 ---------- */
-  .hero {
-    max-width: 560px; margin: 0 auto 14px; padding: 14px;
-    background: linear-gradient(160deg, #1b2432 0%, var(--card) 55%);
-    border: 1px solid var(--line); border-radius: var(--r);
-  }
-  .chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-  .chip {
-    font-size: 12px; padding: 4px 10px; border-radius: 999px;
-    background: #0f141c; border: 1px solid var(--line); color: var(--mut);
-    font-variant-numeric: tabular-nums;
-  }
-  .chip.ok   { color: var(--ok);   border-color: #1e5c38; }
-  .chip.warn { color: var(--warn); border-color: #6b4a12; }
+  /* (概览区那张卡 —— .hero / .chips / .chip —— 已整体删除: 它只有「今日已浇」
+     这种默认内置工行的遗留状态 + 刷新/重启服务三个按钮, 状态明细本来就在
+     「触发检查」卡里。顶部现在只剩 header 里的版本角标 #ver。) */
   #ver { font-size: 12px; padding: 4px 10px; border-radius: 999px;
          background: #0f141c; border: 1px solid var(--line); color: var(--mut); }
-  .hero .hint { margin: 10px 0 0; }
-  .hero-btns { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
-  .hero-btns .primary { flex: 1; min-width: 140px; }
 
   /* ---------- 折叠分组 ---------- */
   main { display: flex; flex-direction: column; gap: var(--gap); max-width: 560px; margin: 0 auto; }
@@ -230,7 +216,11 @@
 
 <header>
   <h1 data-i18n="app.title">💧 澎湃自动化 · Xiaomi 17 Pro</h1>
-  <span id="ver">v0.12.0</span>
+  <!-- 版本角标: 那个带下划线的占位符由 tools/build_zip.sh 用 module.prop 的 version
+       注入, 源码态保持占位符(带 v 前缀, 与 app.js 里 BUILD_VER.charAt(0) !== 'v' 的
+       源码态判据对齐)。这里以前写死过 v0.12.0, 而 loadFoot() 取不到桥版本时就回落到
+       它 —— 于是「装的是 0.13.2、角标永远显示 12.0, 卸载重装也没用」。写死的值不能留。 -->
+  <span id="ver">__BUILD_VER__</span>
   <select id="lang" data-i18n-title="lbl.lang" title="语言"></select>
 </header>
 
@@ -238,24 +228,16 @@
      误以为升级失败/新功能没生效。平时 hidden, 不占位置。 -->
 <div id="upd" class="updwarn" hidden></div>
 
-<!-- 概览: 状态一眼可见, 常用操作集中在这里; 细节全部收进下面的折叠分组 -->
-<div class="hero">
-  <div class="chips">
-    <span id="today" class="chip" data-i18n="app.loading">…</span>
-    <span id="svcpill" class="chip">…</span>
-  </div>
-  <p class="hint" data-i18n="hero.hint"></p>
-  <div class="hero-btns">
-    <!-- 这里原本还有一个「💧 立即浇水（测试）」(#btnTrigger), 它调 `trigger` 无参数,
-         而无参数的默认就是内置工行 —— 与下面工行 profile 行的「立即浇水」
-         (`trigger icbc`) 是同一个操作, 文案也几乎一样。按用户要求一起去重:
-         运行类操作统一由每个 profile 行自己发, 顶部不再放一个写死工行的快捷键
-         (有了多个任务之后, 顶部这个按钮只跑工行反而会误导)。 -->
-    <button id="btnRefresh" class="ghost" data-i18n="btn.refresh">刷新</button>
-    <button id="btnRestart" class="ghost" data-i18n="btn.restart">重启服务</button>
-    <button id="btnFold" class="ghost" data-i18n="ui.collapse">收起全部</button>
-  </div>
-</div>
+<!-- 概览区那张卡(状态胶囊「今日已浇 / 服务」+ 刷新 / 重启服务 / 收起全部)已整体删除:
+     「今日已浇」写的是默认内置工行, 而内置工行早已不是核心(可删可恢复, 多任务
+     Profiles 才是唯一入口); 状态明细在「触发检查」卡里一行不缺; 刷新是重复动作
+     (状态每 15 秒自轮询); 「重启服务」只在排查那条老路径时用, 走 `webctl restart` 即可。
+     下面这段注释是它还在时留下的去重记录, 一并保留:
+       这里原本还有一个「💧 立即浇水（测试）」(#btnTrigger), 它调 `trigger` 无参数,
+       而无参数的默认就是内置工行 —— 与下面工行 profile 行的「立即浇水」
+       (`trigger icbc`) 是同一个操作, 文案也几乎一样。按用户要求一起去重:
+       运行类操作统一由每个 profile 行自己发, 顶部不再放一个写死工行的快捷键
+       (有了多个任务之后, 顶部这个按钮只跑工行反而会误导)。 -->
 
 <main>
   <!-- 任务 Profiles 是「什么时候浇水」的唯一出处。

@@ -29,7 +29,7 @@ Il fonctionne par **contrôle root direct** (`screencap` / `getevent` / `sendeve
 - **Prise en charge de plusieurs appareils** : une couche de profil d'appareil permet d'ajuster par modèle la taille de l'écran, l'ID d'affichage, la disposition du pavé numérique de l'écran de verrouillage et la grille du motif, afin que l'enregistrement, la relecture et le déverrouillage PIN / motif fonctionnent aussi sur d'autres téléphones HyperOS 4. La base mesurée du Xiaomi 17 Pro est conservée telle quelle et n'est pas affectée.
 - **Le WebUI se met à jour avec le module** : les ressources portent une version, la mise en cache est désactivée, et la page vérifie d'elle-même si le document est périmé puis le recharge — plus besoin de désinstaller puis réinstaller après une mise à jour.
 - **Bandeau « mise à jour en attente »** : juste après le flash et avant le redémarrage, le badge indique déjà la nouvelle version alors que le code exécuté est encore l'ancien — un bandeau en haut du WebUI le dit explicitement et disparaît une fois le redémarrage effectué.
-- **Une interface plus aérée** : un résumé d'état en haut, tout le détail rangé dans des sections repliables, pour que le premier écran ne soit plus un mur de formulaire ; tout déplier / tout replier en un geste.
+- **Une interface plus aérée** : tout le détail rangé dans des sections repliables — chaque carte se déplie et se replie seule, pour que le premier écran ne soit plus un mur de formulaire ; l'état détaillé est dans la carte « Vérification du déclenchement ». La rangée de raccourcis en haut, qui ne servait que la tâche ICBC intégrée (pastille « arrosée ou non », Actualiser, Redémarrer le service, Tout replier), a disparu : la tâche intégrée n'est plus le cœur du module, les Profils de tâches le sont.
 - Le code PIN n'est écrit que dans la configuration locale et n'apparaît jamais dans l'état, le journal ni le code source.
 
 ## Environnement requis
@@ -69,7 +69,7 @@ La liste complète des sous-commandes figure en en-tête du fichier : `webctl.sh
 
 ## Installation
 
-1. Téléchargez `XiaomiAutomation-v0.13.2.zip` depuis les Releases.
+1. Téléchargez `XiaomiAutomation-v0.13.3.zip` depuis les Releases.
 2. Flashez ce zip dans KernelSU / Magisk.
 3. Redémarrez, ouvrez le WebUI du module et réglez la méthode de déverrouillage et le code PIN selon vos besoins.
 4. Pour une tâche enregistrée, renseignez le nom de package de l'application cible ; basculez vers cette application et appuyez sur « Démarrer l'enregistrement », puis sur « Arrêter l'enregistrement » lorsque vous avez terminé.
@@ -193,7 +193,7 @@ bash tools/build_zip.sh
 Le script écrit le fichier suivant dans le répertoire parent :
 
 ```text
-XiaomiAutomation-v0.13.2.zip
+XiaomiAutomation-v0.13.3.zip
 ```
 
 ## Licence

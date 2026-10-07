@@ -1,6 +1,6 @@
 id=icbc_daily_water
 name=澎湃自动化—XiaomiAutomation
-version=v0.13.2
-versionCode=1142
+version=v0.13.3
+versionCode=1143
 author=petittux
 description=澎湃自动化（XiaomiAutomation）：Xiaomi 17 Pro / HyperOS 4 的 root 自动化模块，多任务定时调度 + 任意 App 录制回放 + 内置工行每日浇水。支持每周选执行日、全场录取、锁屏图案解锁，内置任务可删。纯 root 直控（sendevent/screencap/getevent），无 Hook、无 Xposed、无无障碍。WebUI 支持 KernelSU/APatch，Magisk 配 KsuWebUI 或 MMRL。内置设备档案层，换机可自动检测屏幕参数。仅供技术学习研究，与工商银行官方无任何关联。 | XiaomiAutomation: a root automation module for Xiaomi 17 Pro / HyperOS 4 — multi-profile scheduler + record/replay for any app + built-in ICBC daily watering (07:30 default). Selectable weekdays, whole-device recording, pattern unlock, deletable built-in task. Pure root control (sendevent/screencap/getevent), no hooks, no Xposed, no accessibility service. WebUI on KernelSU/APatch; on Magisk use KsuWebUI or MMRL. Ships a device-profile layer for other phones. For technical study and research only; no connection to ICBC.

@@ -44,10 +44,26 @@ const BUILD_VC = '__BUILD_VC__';
 const BUILD_VER = '__BUILD_VER__';
 const HEAL_KEY = 'icbw.heal';
 
+// ksu.moduleInfo() 的返回形状在宿主之间并不统一: 多数给对象, 有的(KSU 的某些分支、
+// MMRL 之类)给的是一段 JSON 字符串。拿到字符串时取 .version 永远是 undefined ——
+// 表现就是「模块明明已经 0.13.3, 界面角标却一直停在 index.html 里写死的那个旧值,
+// 卸载重装也照样」(v0.13.2 真机踩过, 用户看到的是 v0.12.0)。
+// 这里统一归一成对象, 拿不到就 null; selfHeal() 和 loadFoot() 共用它,
+// 免得只修角标、缓存自愈那半边继续静默失效。
+function modInfo() {
+  let mi = null;
+  try { mi = moduleInfo(); } catch (e) { return null; }   // ksu 桥未就绪 / 宿主没这个接口
+  if (typeof mi === 'string') {
+    const s = mi.trim();
+    if (!s) return null;
+    try { mi = JSON.parse(s); } catch (e) { return null; }   // 非 JSON 的说明文案, 当没有
+  }
+  return (mi && typeof mi === 'object') ? mi : null;
+}
+
 function selfHeal() {
   if (!/^\d+$/.test(BUILD_VC) || BUILD_VER.charAt(0) !== 'v') return;   // 源码态不做处理
-  let mi = null;
-  try { mi = moduleInfo(); } catch (e) { return; }   // ksu 桥未就绪, 等下次重试
+  const mi = modInfo();
   if (!mi) return;
   // 设备侧版本标识: 优先 versionCode, 退化到 version 字符串; 两条都认。
   let devTag = '';
@@ -175,15 +191,10 @@ async function loadStatus() {
     const tkre = /([A-Za-z_0-9-]+)=(\S+)/g;
     let tt;
     while ((tt = tkre.exec(line)) !== null) cfg[tt[1]] = tt[2];
-    if (line.indexOf('today: ') === 0) cfg._today = line.slice(7);
     if (line.indexOf('service: ') === 0) cfg._svc = line.slice(9);
     if (line.indexOf('fail_times: ') === 0) cfg._fail = line.slice(12);
     if (line.indexOf('update: ') === 0) cfg._upd = line.slice(8);
   }
-  // 今日状态
-  const td = $('today');
-  if (cfg._today === 'DONE') { td.textContent = t('st.todayDone'); td.className = 'pill ok'; }
-  else { td.textContent = t('st.todayPending'); td.className = 'pill warn'; }
   // 新包已就位、等重启合并 —— 这时版本角标已经是新版本了, 不说一句就会以为升级
   // 已经生效, 然后对着旧代码调半天参数(v0.13.1 图案坐标就是这么白折腾的)。
   const ub = $('upd');
@@ -230,12 +241,6 @@ async function loadStatus() {
     chkRow(t('chk.fail'), failOk ? t('chk.failN', { n: failN }) : t('chk.failBlocked', { n: failN }), failOk)
   ];
   $('chk').innerHTML = rows.join('');
-  // 概览区: 守护服务状态也做成一枚徽标, 不用展开「触发检查」就能看到
-  const sp = $('svcpill');
-  if (sp) {
-    sp.textContent = svcRun ? t('st.svcRun') : t('st.svcStop');
-    sp.className = 'chip ' + (svcRun ? 'ok' : 'warn');
-  }
   loadProfiles();
 }
 
@@ -663,11 +668,14 @@ async function loadLog() {
 
 // ---------- 底部版本信息 ----------
 function loadFoot() {
-  let ver = '';
-  try {
-    const mi = moduleInfo();
-    if (mi && mi.version) ver = mi.version;
-  } catch (e) {}
+  // 取版本的三级来源: ①宿主桥给的(= 设备上正在跑的模块), ②构建期从 module.prop
+  // 注入的 BUILD_VER(与本次打包的 webroot 同源), ③index.html 的静态文本。
+  //   ② 是这次补上的: 桥不给 version 时原本直接落到 ③, 而 ③ 是写死的旧版本号 ——
+//   于是「装的是新版、角标永远显示 v0.12.0」, 而且卸载重装也不变(文件本来就没变)。
+  const mi = modInfo();
+  let ver = (mi && mi.version) ? String(mi.version).trim() : '';
+  if (!ver && BUILD_VER.charAt(0) === 'v') ver = BUILD_VER;   // 源码态占位符不带 v, 直接跳过
+  if (ver && !/^v/i.test(ver)) ver = 'v' + ver;               // 有的宿主把 v 前缀去了
   const p = $('ver');
   if (ver) p.textContent = ver;
   $('footver').textContent = t('foot.ver', { ver: ver || p.textContent, lang: langLabel(getLang()) });
@@ -684,28 +692,14 @@ function buildLangSelect() {
 
 // ---------- 折叠分组 ----------
 // 页面默认只展开「定时」和「任务」, 其余收起来 —— 首屏不再是一大坨表单。
-// 需要看全部时点概览区的「展开全部」, 之后再一键收起。
-const SEC_SEL = 'main > details.sec';
-
-function secsAll() { return document.querySelectorAll(SEC_SEL); }
-
-function foldAll(open) {
-  secsAll().forEach((d) => { d.open = open; });
-  refreshFoldBtn();
-}
-
-function refreshFoldBtn() {
-  const b = $('btnFold');
-  if (!b) return;
-  const anyOpen = Array.prototype.some.call(secsAll(), (d) => d.open);
-  b.textContent = anyOpen ? t('ui.collapse') : t('ui.expand');
-}
+// (原来的「展开全部 / 收起全部」总开关在概览区那张卡里, 随卡片一起删了 ——
+//  它只服务一个写死内置工行的快捷操作区, 卡片本身已经先一步删掉了。
+//  各卡片自己的 <details> 开合保留, 不需要额外开关, 所以这里也不再有 SEC_SEL 那套总控。)
 
 // 切换语言后整页重绘: 静态文案由 applyI18n 处理, 动态文案(状态/任务卡/日志)重跑一次。
 function onLangChange() {
   setLang($('lang').value);
   loadFoot();
-  refreshFoldBtn();
   loadStatus();
   loadLog();
 }
@@ -726,10 +720,6 @@ $('btnShow').addEventListener('click', () => {
 });
 
 $('lang').addEventListener('change', onLangChange);
-$('btnFold').addEventListener('click', () => {
-  const anyOpen = Array.prototype.some.call(secsAll(), (d) => d.open);
-  foldAll(!anyOpen);
-});
 
 // (enable 的监听随 card.time 卡片一起删掉了 —— 定时开关现在按 profile 各自设,
 //  走的是下面 profs 那条委托里的 pEnable -> `profile set <slug> p_enable`)
@@ -781,18 +771,11 @@ $('profs').addEventListener('click', (e) => onProfAct(e, 'click'));
 $('profs').addEventListener('change', (e) => onProfAct(e, 'change'));
 
 // (btnTrigger 已随「立即浇水」去重删除 —— 运行任务统一走 profile 行的 pRun)
+// (btnRestart / btnRefresh / btnFold 已随概览区那张卡整体删除 —— 状态每 15 秒自轮询,
+//  「刷新」是重复动作; 「重启服务」是排查内置工行那条老路径时才用的快捷键, 现在
+//  排查走 `sh webctl.sh restart` 就够了; 这三个监听留着反而会在删了元素的页面上抛
+//  TypeError 把 app.js 整个挂掉。)
 
-$('btnRestart').addEventListener('click', async () => {
-  if (busy) return;
-  busy = true;
-  const r = await run('restart');
-  busy = false;
-  if (isErr(r)) { errToast(r); return; }
-  toastMsg(t('toast.svcRestarted'));
-  setTimeout(loadStatus, 2000);
-});
-
-$('btnRefresh').addEventListener('click', () => { loadStatus(); loadLog(); });
 $('btnLog').addEventListener('click', loadLog);
 
 // ---------- 设备档案 (v0.11.0) ----------
@@ -973,7 +956,7 @@ setTimeout(selfHeal, 1500);
 // 初次加载: 先定语言(静态文案立即替换), 再拉状态
 buildLangSelect();
 applyI18n(document);
-refreshFoldBtn();
+// (这里原本还有一句 refreshFoldBtn() —— 「收起全部」按钮已随概览区卡片删除)
 
 // 缺桥时只显示整页提示, 不再往下走: 继续跑的话每 15 秒一次的轮询会全失败,
 // 既是满屏 ERR 又是白耗电, 而且会把真正的原因(没注入 root 接口)淹掉。

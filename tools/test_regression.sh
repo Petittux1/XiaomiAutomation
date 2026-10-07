@@ -8,7 +8,7 @@
 #   所以这次改成把不变量直接写成断言: 不需要沙箱, 不需要预先录好的输出,
 #   任何时候 clone 下来都能跑, 再丢一次也无所谓。
 #
-# 七条守卫各挡一类真实发生过/差一点发生的事故:
+# 十条守卫各挡一类真实发生过/差一点发生的事故:
 #   1) water.sh 的 17 Pro 基线取值 —— 防「顺手改坐标/阈值」把唯一实测过的机型改挂
 #   2) service.sh 的单命中          —— 防同一天浇两次(重复触发是最恶劣的失败模式)
 #   3) app.js 的 DOM 引用           —— 防删元素后白屏(删 card.time 时真的会踩到)
@@ -18,6 +18,9 @@
 #   7) 设备档案的形态转换          —— 防保存按钮再次「点了没反应」(v0.12.9 踩过)
 #      后端那段由 test_sandbox.sh 第 6 节覆盖, 这里只钉前端 —— 主故障在前端,
 #      而沙箱跑不到 app.js, 少了这条就还是「六条全绿、按钮是死的」。
+#   8) 图案宫格默认坐标 + 安装脚本 MODDIR 兜底 —— 防坐标被「优化」回估算值(v0.13.1 踩过)
+#   9) 测试解锁防假通过 + 新版本待重启提示 —— 防「画偏了也报成功」「显示新版、跑旧行为」
+#   10) 版本角标取真实版本 + 概览区卡片删干净 —— 防角标又写死旧版本号(v0.13.2 踩过)
 #
 # 用法: bash tools/test_regression.sh          (在仓库根目录)
 # 退出码: 0 = 全绿, 1 = 有守卫失败
@@ -647,6 +650,104 @@ if grep -q 'id="upd"[^>]*hidden' webroot/index.html; then
   ok "横幅默认 hidden"
 else
   fail "横幅默认没有 hidden, 没有新版本时也会显示"
+fi
+
+
+# ============ 10. 版本角标不再写死 + 概览区那张卡删干净 ============
+sec "10. 版本角标取真实版本, 概览区卡片删干净"
+
+# v0.13.2 真机反馈:「WebUI 还是显示 12.0, 明明都 13.2 了, 卸载重装也这样」。
+# 两层原因叠在一起, 这节两个都钉:
+#  ① index.html 里 #ver 写死过 v0.12.0, 而 loadFoot() 只认宿主桥给的 version ——
+#    桥一哑(有的宿主 ksu.moduleInfo() 回的是 JSON 字符串, 取 .version 恒为 undefined)
+#    就直接回落到那个写死值, 于是装多少遍都显示 12.0;
+#  ② 取版本只有一条来源, 没有任何兜底。
+if grep -q 'function modInfo()' webroot/app.js && grep -q 'JSON.parse(s)' webroot/app.js; then
+  ok "modInfo() 把 JSON 字符串形态的 moduleInfo 归一成对象"
+else
+  fail "缺 modInfo 归一化 —— 桥返回字符串时 version 永远读不到"
+fi
+
+# 归一化只修一处等于没修: 缓存自愈那半边同样是拿 moduleInfo 比版本, 漏了它
+# 「文档是不是旧的」判断就一直静默放行。
+if [ "$(gc 'const mi = modInfo();' webroot/app.js)" = "2" ]; then
+  ok "selfHeal 与 loadFoot 各自走一次归一化"
+else
+  fail "modInfo() 的调用点不是 2 处(selfHeal/loadFoot 必须都走它)"
+fi
+
+if grep -qF "if (!ver && BUILD_VER.charAt(0) === 'v') ver = BUILD_VER;" webroot/app.js; then
+  ok "桥拿不到 version 时用构建期注入的 BUILD_VER 兜底"
+else
+  fail "loadFoot 没有 BUILD_VER 兜底, 桥一哑角标就回落到静态值"
+fi
+
+# 占位符化: 源码里不许再出现任何写死的版本号, 真值由构建期注入。
+if grep -qF '<span id="ver">__BUILD_VER__</span>' webroot/index.html; then
+  ok "index.html 的 #ver 是 __BUILD_VER__ 占位符"
+else
+  fail "index.html 的 #ver 不是占位符 —— 写死的版本号会再次让角标说谎"
+fi
+if grep -qE 'id="ver">v[0-9]' webroot/index.html; then
+  fail "index.html 的 #ver 仍写死着一个版本号"
+else
+  ok "#ver 没有写死的版本号"
+fi
+
+if grep -qF '<span id="ver">__BUILD_VER__</span>' tools/build_zip.sh && \
+   grep -qF 'index.html 的版本角标注入未生效' tools/build_zip.sh; then
+  ok "build_zip.sh 注入角标, 且注入失败会让构建失败"
+else
+  fail "build_zip.sh 缺 index.html 角标注入或缺对应的硬失败守卫"
+fi
+
+# ---- 概览区那张卡(状态胶囊 + 刷新/重启服务/收起全部)整体删除 ----
+# 删元素必须连同 app.js 的引用一起删: 模块顶层一次 TypeError 就白屏(第 3 节查
+# 「JS 有、HTML 没有」, 这里查「哪边都不许有」), i18n 键也要跟着删(第 4 节查孤儿)。
+for id in btnRestart btnRefresh btnFold today svcpill; do
+  bad=""
+  grep -q "id=\"$id\"" webroot/index.html && bad="$bad HTML"
+  grep -q "\$('$id')" webroot/app.js && bad="$bad app.js"
+  if [ -n "$bad" ]; then
+    fail "概览区的 #$id 还留在:$bad —— 卡片没删干净"
+  else
+    ok "#$id 已从 index.html 与 app.js 同时移除"
+  fi
+done
+
+if grep -qE '^[[:space:]]*\.hero|^[[:space:]]*\.chips?[[:space:]]*\{' webroot/index.html; then
+  fail "index.html 还留着概览区的 .hero/.chip 样式规则(死 CSS)"
+else
+  ok "概览区的 .hero / .chip 样式规则已一并删除"
+fi
+
+# 删掉的键必须四语一起删(第 4 节管键数一致, 这里点名以防有人只删一种语言的键),
+# 而「触发检查」卡还在用的两枚必须留着 —— svcpill 走的正是这两枚, 别连坐删错。
+for k in hero.hint btn.refresh btn.restart app.loading st.todayDone \
+         st.todayPending toast.svcRestarted ui.collapse ui.expand; do
+  n=$(gc "'$k':" webroot/i18n.js)
+  if [ "$n" = "0" ]; then ok "i18n 已删掉无人引用的 $k"; else fail "$k 还在 i18n 里($n 语), 应随卡片一起删"; fi
+done
+for k in st.svcRun st.svcStop; do
+  n=$(gc "'$k':" webroot/i18n.js)
+  if [ "$n" = "4" ]; then ok "i18n 保留 $k(触发检查卡在用)"; else fail "$k 只剩 $n 语, 触发检查卡会显示成键名"; fi
+done
+
+# README 要跟着改: 既不许再承诺已经删掉的「展开全部/收起全部」, 包名也必须跟着
+# module.prop 走 —— 四份 README × 每份两处, 手改最容易漏。
+V=$(grep -m1 '^version=' module.prop | cut -d= -f2)
+for f in README.md README.en.md README.fr.md README.ru.md; do
+  n=$(grep -c "XiaomiAutomation-${V}.zip" "$f" || true)
+  if [ "$n" -ge 1 ]; then ok "$f 提到的包名与 module.prop 的 $V 一致"; else fail "$f 里没有 XiaomiAutomation-${V}.zip(包名没跟着版本走)"; fi
+done
+# 判据用「原文那句承诺」而不是按钮名: 新文案会把已删的按钮名列出来做说明,
+# 那是在交代改动、不算承诺; 老文案里的「一键切换 / in one tap / en un geste」才是。
+if grep -q '「展开全部 / 收起全部」一键切换' README.md \
+   || grep -qi 'expand / collapse everything in one tap' README.en.md \
+   || grep -qi 'tout déplier / tout replier en un geste' README.fr.md; then
+  fail "README 还在承诺已删除的「展开全部 / 收起全部」"
+else
+  ok "README 不再承诺已删除的总开关按钮"
 fi
 
 
