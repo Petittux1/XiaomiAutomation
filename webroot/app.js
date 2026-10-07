@@ -821,11 +821,11 @@ async function loadDevice() {
   devSet('devPY0',     d.DEV_PIN_Y0 || '1015');
   devSet('devPDX',     d.DEV_PIN_DX || '320');
   devSet('devPDY',     d.DEV_PIN_DY || '210');
-  // 图案宫格几何没有实测基线, 默认值是按 17 Pro 居中估算的, 供用户校准后覆盖
-  devSet('devPaX0',    d.DEV_PAT_X0 || '270');
-  devSet('devPaY0',    d.DEV_PAT_Y0 || '1000');
-  devSet('devPaDX',    d.DEV_PAT_DX || '340');
-  devSet('devPaDY',    d.DEV_PAT_DY || '340');
+  // 图案宫格几何: 17 Pro 实测值(1220x2656 锁屏截图量点), 换机器覆盖后按覆盖值显示
+  devSet('devPaX0',    d.DEV_PAT_X0 || '310');
+  devSet('devPaY0',    d.DEV_PAT_Y0 || '1193');
+  devSet('devPaDX',    d.DEV_PAT_DX || '300');
+  devSet('devPaDY',    d.DEV_PAT_DY || '300');
   devRenderBadge(d);
 }
 

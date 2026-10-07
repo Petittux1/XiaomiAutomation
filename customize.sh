@@ -1,6 +1,17 @@
 #!/system/bin/sh
 # icbc_daily_water 安装脚本 (KSU/Magisk customize.sh)
-MODDIR=$(dirname "$0")
+# MODDIR 不能盲信 dirname "$0": KSU/Magisk 是用 `.` 把本文件 source 进安装器的,
+# 那时 $0 指的是安装器自己, dirname 出来的目录里既没有 module.prop 也没有 webroot,
+# 于是第 53 行的完整性校验会把四个文件全报成「缺少」—— 文件其实一个没少(假警报),
+# 但用户看到的就是「WebUI 资源不完整, 建议卸载后重新刷入」。优先认安装器导出的
+# MODPATH, 再退到 $0, 最后退到模块的两个标准落点, 三处都得有 module.prop 才算数。
+MODDIR=${MODPATH:-}
+[ -n "$MODDIR" ] || MODDIR=$(dirname "$0")
+if [ ! -f "$MODDIR/module.prop" ]; then
+  for _d in /data/adb/modules_update/icbc_daily_water /data/adb/modules/icbc_daily_water; do
+    if [ -f "$_d/module.prop" ]; then MODDIR=$_d; break; fi
+  done
+fi
 CFGDIR=/data/adb/icbc_water
 CFG=$CFGDIR/sched.conf
 PFX=$CFGDIR/profiles
@@ -52,7 +63,7 @@ fi
 WEBERR=0
 for f in index.html app.js i18n.js kernelsu.js; do
   if [ ! -f "$WEB/$f" ]; then
-    echo "! webroot 缺少 $f —— WebUI 可能无法正常显示"
+    echo "! webroot 缺少 $f (查找目录: $WEB) —— WebUI 可能无法正常显示"
     WEBERR=1
   fi
 done

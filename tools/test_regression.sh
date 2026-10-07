@@ -519,6 +519,57 @@ sys.exit(1 if bad else 0)
 PY
 
 
+# ============ 8. 图案宫格默认坐标 + 安装脚本的 MODDIR 兜底 ============
+sec "8. 图案宫格 PAT_* 默认坐标四处一致"
+
+# 这四个值来自 17 Pro 1220x2656 锁屏截图的实测(三行中心 1192.5/1492.5/1792.5,
+# 三列中心 309.5/609.5/909.5, 行列距都是 300)。散在四个文件里, 改一处漏三处就会
+# 出现「界面显示一套、调度用另一套」—— 而图案画错一格系统直接当错图案, 不解锁。
+for spec in 'service.sh:PAT_X0=${PAT_X0:-310}' \
+            'service.sh:PAT_Y0=${PAT_Y0:-1193}' \
+            'service.sh:PAT_DX=${PAT_DX:-300}' \
+            'service.sh:PAT_DY=${PAT_DY:-300}' \
+            'sched.conf:PAT_X0=310' \
+            'sched.conf:PAT_Y0=1193' \
+            'sched.conf:PAT_DX=300' \
+            'sched.conf:PAT_DY=300' \
+            'device.conf:DEV_PAT_X0=310' \
+            'device.conf:DEV_PAT_Y0=1193' \
+            'device.conf:DEV_PAT_DX=300' \
+            'device.conf:DEV_PAT_DY=300' \
+            "webroot/app.js:d.DEV_PAT_X0 || '310'" \
+            "webroot/app.js:d.DEV_PAT_Y0 || '1193'" \
+            "webroot/app.js:d.DEV_PAT_DX || '300'" \
+            "webroot/app.js:d.DEV_PAT_DY || '300'"
+do
+  f=${spec%%:*}; pat=${spec#*:}
+  if grep -qF -- "$pat" "$f"; then
+    ok "$f  ->  $pat"
+  else
+    fail "$f 里找不到 $pat —— 四处默认值不一致, 图案会画到别的格子"
+  fi
+done
+
+# 估算时代的旧值不许再出现在 PAT_ 行里
+STALE=$(for f in service.sh sched.conf device.conf webroot/app.js; do
+          grep -n 'PAT_' "$f" | grep -E '270|1000|340'
+        done || true)
+if [ -n "$STALE" ]; then
+  fail "还有 PAT_ 行带着估算时代的旧值: $STALE"
+else
+  ok "PAT_ 行里没有 270/1000/340 残留"
+fi
+
+# 安装脚本的 MODDIR 必须认 MODPATH: KSU/Magisk 是 source 执行 customize.sh 的,
+# 此时 $0 是安装器路径, dirname $0 指错目录 -> webroot 四个文件被全报成「缺少」。
+# (v0.13.0 真机刷入日志里就是这条假警报。)
+if grep -q 'MODPATH' customize.sh && grep -q '/data/adb/modules_update/icbc_daily_water' customize.sh; then
+  ok "customize.sh 认 MODPATH 并回落到模块标准落点"
+else
+  fail "customize.sh 没有 MODPATH/标准落点兜底, 安装日志会继续报 webroot 缺文件"
+fi
+
+
 # ============ 汇总 ============
 printf '\n'
 if [ "$FAILS" = "0" ]; then

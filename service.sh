@@ -34,12 +34,14 @@ PIN_X0=${PIN_X0:-290}
 PIN_Y0=${PIN_Y0:-1015}
 PIN_DX=${PIN_DX:-320}
 PIN_DY=${PIN_DY:-210}
-# 图案宫格几何基线 (17 Pro 居中估算, 实测值写进 sched.conf 或设备档案 DEV_PAT_*)。
+# 图案宫格几何基线: 17 Pro 实测值 (1220x2656 锁屏截图里量的九个点,
+# 三行中心 y=1192.5/1492.5/1792.5, 三列中心 x=309.5/609.5/909.5, 行列距都是 300)。
 # PAT_X0/PAT_Y0 = 第 1 格中心, PAT_DX/PAT_DY = 相邻两格中心距。
-PAT_X0=${PAT_X0:-270}
-PAT_Y0=${PAT_Y0:-1000}
-PAT_DX=${PAT_DX:-340}
-PAT_DY=${PAT_DY:-340}
+# 换机器用设备档案 DEV_PAT_* 覆盖; 别的机型仍是估算, 要用解锁测试按钮校准。
+PAT_X0=${PAT_X0:-310}
+PAT_Y0=${PAT_Y0:-1193}
+PAT_DX=${PAT_DX:-300}
+PAT_DY=${PAT_DY:-300}
 
 # 锁屏 PIN 宫格坐标: 设备档案覆盖 (opt-in)
 # 17 Pro 走 DEV_APPLY=0, 本段不执行, 上面四个值就是 sched.conf 里的实测值。

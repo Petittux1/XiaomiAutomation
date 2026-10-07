@@ -68,7 +68,7 @@ La liste complète des sous-commandes figure en en-tête du fichier : `webctl.sh
 
 ## Installation
 
-1. Téléchargez `XiaomiAutomation-v0.13.0.zip` depuis les Releases.
+1. Téléchargez `XiaomiAutomation-v0.13.1.zip` depuis les Releases.
 2. Flashez ce zip dans KernelSU / Magisk.
 3. Redémarrez, ouvrez le WebUI du module et réglez la méthode de déverrouillage et le code PIN selon vos besoins.
 4. Pour une tâche enregistrée, renseignez le nom de package de l'application cible ; basculez vers cette application et appuyez sur « Démarrer l'enregistrement », puis sur « Arrêter l'enregistrement » lorsque vous avez terminé.
@@ -85,7 +85,7 @@ id=icbc_daily_water
 
 Ne supprimez pas ces répertoires et ne modifiez pas l'identifiant du module ; votre configuration, vos profils, votre code PIN et vos actions enregistrées sont conservés.
 
-> Si le WebUI semble encore obsolète après la mise à jour, vérifiez la version en haut à droite : elle doit indiquer `v0.13.0`. Sinon, l'ancien paquet a été installé.
+> Si le WebUI semble encore obsolète après la mise à jour, vérifiez la version en haut à droite : elle doit indiquer `v0.13.1`. Sinon, l'ancien paquet a été installé.
 
 ## Utilisation
 
@@ -128,7 +128,7 @@ Deux cas particuliers à connaître :
 
 Avant une tâche, le module tente de réveiller et de déverrouiller l'écran, soit par saisie aveugle du code PIN, soit en rejouant votre motif, soit par balayage vers le haut. Il maintient l'écran allumé pendant l'exécution puis restaure le verrouillage d'orientation, `screen_off_timeout` et le maintien d'éveil d'origine. Si l'état de verrouillage ne peut pas être confirmé, il abandonne en toute sécurité au lieu d'injecter des coordonnées à l'aveugle.
 
-**Déverrouillage par motif** : choisissez « Motif » comme méthode, puis dessinez 4 à 9 points distincts sur le pavé à neuf points du WebUI (glissez pour les relier ; le « point intermédiaire » qu'Android accepte est complété automatiquement) et enregistrez. Le motif reste dans la configuration locale — l'interface n'affiche jamais que « défini », jamais l'ordre des points. Le pavé utilise par défaut des coordonnées estimées pour le Xiaomi 17 Pro ; sur un autre téléphone, ajustez `PAT_X0` / `PAT_Y0` (premier point, en haut à gauche) et `PAT_DX` / `PAT_DY` (espacement) dans la carte « 📱 Profil d'appareil », puis appuyez sur le bouton d'essai « verrouillage → déverrouillage » : un succès affiche `UNLOCK_OK`, sinon corrigez les quatre valeurs et réessayez. Sans motif, le module revient au PIN ou au balayage.
+**Déverrouillage par motif** : choisissez « Motif » comme méthode, puis dessinez 4 à 9 points distincts sur le pavé à neuf points du WebUI (glissez pour les relier ; le « point intermédiaire » qu'Android accepte est complété automatiquement) et enregistrez. Le motif reste dans la configuration locale — l'interface n'affiche jamais que « défini », jamais l'ordre des points. Le pavé utilise par défaut des coordonnées mesurées sur le Xiaomi 17 Pro (son écran de verrouillage 1220×2656) ; sur un autre téléphone, ajustez `PAT_X0` / `PAT_Y0` (premier point, en haut à gauche) et `PAT_DX` / `PAT_DY` (espacement) dans la carte « 📱 Profil d'appareil », puis appuyez sur le bouton d'essai « verrouillage → déverrouillage » : un succès affiche `UNLOCK_OK`, sinon corrigez les quatre valeurs et réessayez. Sans motif, le module revient au PIN ou au balayage.
 
 ### Langue
 
@@ -144,7 +144,7 @@ La carte « 📱 Profil d'appareil » agit sur les éléments suivants : **la la
 
 - **Xiaomi 17 Pro** : la carte contient déjà les valeurs mesurées — **n'y touchez pas**. Laissez « Activer le remplacement » désactivé et le module utilise les valeurs d'origine de `water.sh` / `sched.conf`.
 - **Autres modèles HyperOS 4** (Xiaomi 17, 17 Pro Max, …) : appuyez sur « 🔍 Détecter ce téléphone » pour remplir `wm size` et `wm density`, vérifiez les valeurs, puis cochez « Activer le remplacement » et enregistrez. Le pavé numérique de l'écran de verrouillage ne peut pas être détecté de façon fiable : remplissez-le à la main — sinon les valeurs du 17 Pro sont utilisées et les mauvais chiffres sont tapés.
-- **Grille du motif** : `PAT_X0` / `PAT_Y0` est la position en pixels du premier point (en haut à gauche) et `PAT_DX` / `PAT_DY` l'espacement horizontal / vertical (défauts `270 / 1000 / 340 / 340`, estimés pour le 17 Pro). Vérifiez avec le bouton d'essai « verrouillage → déverrouillage » : si ce ne sont pas les bonnes cases qui sont tracées, ajustez ces quatre valeurs et réessayez jusqu'à `UNLOCK_OK`.
+- **Grille du motif** : `PAT_X0` / `PAT_Y0` est la position en pixels du premier point (en haut à gauche) et `PAT_DX` / `PAT_DY` l'espacement horizontal / vertical (défauts `310 / 1193 / 300 / 300`, mesurés sur l'écran de verrouillage 1220×2656 du 17 Pro). Vérifiez avec le bouton d'essai « verrouillage → déverrouillage » : si ce ne sont pas les bonnes cases qui sont tracées, ajustez ces quatre valeurs et réessayez jusqu'à `UNLOCK_OK`.
 - Le profil se trouve dans `/data/adb/icbc_water/device.conf`. `DEV_APPLY=0` (par défaut) signifie « pas de remplacement, on utilise la base du 17 Pro » ; seul `DEV_APPLY=1` active le remplacement. Chaque valeur doit passer un contrôle « unique + chiffres uniquement » : une erreur ou un fichier corrompu laisse au pire le remplacement inactif — il ne peut pas casser le processus d'arrosage.
 
 > **Tous les modèles autres que le Xiaomi 17 Pro sont « en test ».** La résolution, le DPI et la hauteur des barres système influencent la mise en page de l'interface, par conséquent : **le parcours ICBC n'est pas garanti** ; mais **l'enregistrement, la relecture et le déverrouillage PIN fonctionnent normalement**. Ne l'essayez pas sur votre téléphone principal.
@@ -190,7 +190,7 @@ bash tools/build_zip.sh
 Le script écrit le fichier suivant dans le répertoire parent :
 
 ```text
-XiaomiAutomation-v0.13.0.zip
+XiaomiAutomation-v0.13.1.zip
 ```
 
 ## Licence

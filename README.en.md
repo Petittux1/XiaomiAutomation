@@ -68,7 +68,7 @@ The full subcommand list is in the file header: `webctl.sh status|setpin|setpatt
 
 ## Installation
 
-1. Download `XiaomiAutomation-v0.13.0.zip` from Releases.
+1. Download `XiaomiAutomation-v0.13.1.zip` from Releases.
 2. Flash that zip in KernelSU / Magisk.
 3. Reboot, open the module WebUI and set the unlock method and PIN as needed.
 4. For a recorded task, fill in the target app package name; switch to that app and press "Start recording", then press "Stop recording" when you are done.
@@ -85,7 +85,7 @@ id=icbc_daily_water
 
 Do not delete these directories or change the module ID; your configuration, profiles, PIN and recorded actions are carried over.
 
-> If the WebUI still looks stale after upgrading, check the version in the top right — it must read `v0.13.0`. If it does not, the old package was installed.
+> If the WebUI still looks stale after upgrading, check the version in the top right — it must read `v0.13.1`. If it does not, the old package was installed.
 
 ## Usage
 
@@ -128,7 +128,7 @@ Two exceptions to keep in mind:
 
 Before a task the module tries to wake and unlock the screen, either by blind PIN entry, by replaying your pattern, or by swiping up. It keeps the screen awake while running and restores the original rotation lock, `screen_off_timeout` and stay-awake setting afterwards. If the lock state cannot be confirmed it aborts safely instead of injecting blind coordinates.
 
-**Pattern unlock**: choose "Pattern" as the unlock method, then tap out 4–9 distinct dots on the nine-dot pad in the WebUI (drag to connect them; the "middle dot" Android accepts is filled in automatically) and save. The pattern stays in the on-device config — the interface only ever echoes "set", never the dot order. The pad defaults to coordinates estimated for the Xiaomi 17 Pro; on another phone tune `PAT_X0` / `PAT_Y0` (top-left dot) and `PAT_DX` / `PAT_DY` (spacing) in the "📱 Device profile" card, then press the "lock → unlock test" button: success prints `UNLOCK_OK`, and a miss means nudge the four values and try again. With no pattern set the module falls back to PIN or swipe.
+**Pattern unlock**: choose "Pattern" as the unlock method, then tap out 4–9 distinct dots on the nine-dot pad in the WebUI (drag to connect them; the "middle dot" Android accepts is filled in automatically) and save. The pattern stays in the on-device config — the interface only ever echoes "set", never the dot order. The pad defaults to coordinates measured on the Xiaomi 17 Pro (its 1220×2656 lock screen); on another phone tune `PAT_X0` / `PAT_Y0` (top-left dot) and `PAT_DX` / `PAT_DY` (spacing) in the "📱 Device profile" card, then press the "lock → unlock test" button: success prints `UNLOCK_OK`, and a miss means nudge the four values and try again. With no pattern set the module falls back to PIN or swipe.
 
 ### Language
 
@@ -144,7 +144,7 @@ The "📱 Device profile" card affects exactly these things: **screen width/heig
 
 - **Xiaomi 17 Pro**: the card already holds the measured values — **leave them alone**. Keep "Enable override" off and the module uses the original values from `water.sh` / `sched.conf`.
 - **Other HyperOS 4 models** (Xiaomi 17, 17 Pro Max, …): press "🔍 Auto-detect this phone" to fill in `wm size` and `wm density`, check the numbers, then tick "Enable override" and save. The lock-screen keypad cannot be detected reliably, so fill it in by hand — otherwise the 17 Pro values are used and the wrong digits get tapped.
-- **Pattern grid**: `PAT_X0` / `PAT_Y0` is the pixel position of the first dot (top-left) and `PAT_DX` / `PAT_DY` the horizontal / vertical spacing (defaults `270 / 1000 / 340 / 340`, estimated for the 17 Pro). Verify with the "lock → unlock test" button: if the wrong cells get drawn, adjust these four values and re-test until it prints `UNLOCK_OK`.
+- **Pattern grid**: `PAT_X0` / `PAT_Y0` is the pixel position of the first dot (top-left) and `PAT_DX` / `PAT_DY` the horizontal / vertical spacing (defaults `310 / 1193 / 300 / 300`, measured on the 17 Pro's 1220×2656 lock screen). Verify with the "lock → unlock test" button: if the wrong cells get drawn, adjust these four values and re-test until it prints `UNLOCK_OK`.
 - The profile lives in `/data/adb/icbc_water/device.conf`. `DEV_APPLY=0` (the default) means "no override, use the 17 Pro baseline"; only `DEV_APPLY=1` turns the override on. Every value must pass a "unique + digits only" check, so a mistake or a corrupted file can at worst leave the override inactive — it cannot break the watering flow.
 
 > **Every model other than the Xiaomi 17 Pro is "testing".** Resolution, DPI and system bar heights all affect the UI layout, so: **the ICBC flow is not guaranteed to work**; but **recording, replay and PIN auto-unlock work normally**. Do not try it on a daily-driver phone.
@@ -190,7 +190,7 @@ bash tools/build_zip.sh
 The script writes the following file into the parent directory:
 
 ```text
-XiaomiAutomation-v0.13.0.zip
+XiaomiAutomation-v0.13.1.zip
 ```
 
 ## License
