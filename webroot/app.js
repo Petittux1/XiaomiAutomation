@@ -641,6 +641,10 @@ async function onProfAct(e, evType) {
         const r = await run('record stop ' + slug);
         if (isErr(r)) { errToast(r); return; }
         toastMsg(t('toast.recStopped'));
+        // 一条动作都没抓到时, 只说「已停止」会让人以为录成功了 —— 补一句怎么补救。
+        if (r.indexOf('REC_STOP') === 0 && r.indexOf('empty') !== -1) {
+          setTimeout(function () { toastMsg(t('toast.recEmpty')); }, 1200);
+        }
         if (recPoll) { clearInterval(recPoll); recPoll = null; }
         loadProfiles();
       } else {
@@ -876,6 +880,18 @@ async function devDetect() {
   if (d.DEV_SW)    devSet('devSW', d.DEV_SW);
   if (d.DEV_SH)    devSet('devSH', d.DEV_SH);
   if (d.DEV_DPI)   devSet('devDPI', d.DEV_DPI);
+  // 宫格建议值: 检测到非 17 Pro 的几何时, 后端会用与解锁完全相同的换算预填这八个格子。
+  // 以前这里什么都不填, 用户照着「自动检测→启用覆盖→保存」走一遍, 存下来的还是
+  // 17 Pro 的像素值, 而换算基准(K = 轴max/SW)已经变了 —— 图案就整片画偏,
+  // 真机上那台 Xiaomi 15 Pro 的「图案解锁搁那瞎划拉」就是这么来的。
+  if (d.DEV_PAT_X0) devSet('devPaX0', d.DEV_PAT_X0);
+  if (d.DEV_PAT_Y0) devSet('devPaY0', d.DEV_PAT_Y0);
+  if (d.DEV_PAT_DX) devSet('devPaDX', d.DEV_PAT_DX);
+  if (d.DEV_PAT_DY) devSet('devPaDY', d.DEV_PAT_DY);
+  if (d.DEV_PIN_X0) devSet('devPX0', d.DEV_PIN_X0);
+  if (d.DEV_PIN_Y0) devSet('devPY0', d.DEV_PIN_Y0);
+  if (d.DEV_PIN_DX) devSet('devPDX', d.DEV_PIN_DX);
+  if (d.DEV_PIN_DY) devSet('devPDY', d.DEV_PIN_DY);
   // 显示 ID: 检测统一给 0, 只有当与当前值不同时才覆盖, 免得抹掉真机上的非 0 ID
   if (d.DEV_D !== undefined && d.DEV_D !== '' && $('devD') && $('devD').value !== d.DEV_D) {
     devSet('devD', d.DEV_D);

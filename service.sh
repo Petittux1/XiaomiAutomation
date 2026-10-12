@@ -53,8 +53,10 @@ pinpick() {
   [ "$(grep -c "^$1=" "$PINCONF" 2>/dev/null)" = "1" ] || return 0
   sed -n "s/^$1=\([0-9][0-9]*\)$/\1/p" "$PINCONF" 2>/dev/null | head -1
 }
+DEV_ON=0
 if [ "$(grep -c '^DEV_APPLY=' "$PINCONF" 2>/dev/null)" = "1" ] \
    && [ "$(sed -n 's/^DEV_APPLY=\(1\)$/1/p' "$PINCONF" 2>/dev/null | head -1)" = "1" ]; then
+  DEV_ON=1
   PV_X0=$(pinpick DEV_PIN_X0)
   PV_Y0=$(pinpick DEV_PIN_Y0)
   PV_DX=$(pinpick DEV_PIN_DX)
@@ -124,15 +126,62 @@ NEWV=$(pending_new_ver)
 [ -n "$NEWV" ] && echo $(date +%m%d-%H%M) UPDATE pending=$NEWV active=$VER reboot=needed >> $LOG
 
 # ---------- 设备发现 (getevent 单遍扫描 + boot_id 缓存) ----------
+# ---- TDEV_DISC_BEGIN 触摸设备发现 (四份拷贝必须逐字一致, 回归第 11 节比对) ----
+# 不能只认设备名: 换个机型触摸控制器的名字就变 (Xiaomi_Touch_Input_0/_1、
+# xiaomi_touch、fts、goodix、synaptics ...), 以前写死 Xiaomi_Touch_Input_0, 找不到
+# 就回落到写死的 event8 —— 那个节点在别的机器上可能是指纹/耳机 jack:
+#   · 解锁: event8 是另一个触摸节点时轴 max 不同, K = 轴max/SW 就算错, 图案整片
+#     画偏 (真机反馈: Xiaomi 15 Pro 用户「图案解锁搁那瞎划拉」); 轴 max <= 20000 时
+#     K 干脆停在 100, 偏得更远。
+#   · 录制: 同一处判据, event8 不存在 -> daemon 秒退 -> 界面只剩「ERR start failed」。
+# 判据改成能力: 必须同时有 ABS_MT 的 X(0035)/Y(0036) 两轴, 分数高者胜出 ——
+# 轴范围越大越可能是主屏触摸 (17 Pro 的 _0 是 121999x265599, _1 只有 90399x57199),
+# 名字只当加分项。一个都判不出来才回落 event8, 并把 TDEV_HOW=fallback 留给调用方记日志。
+touch_score() {  # $1 = /dev/input/eventN; 0 = 不是触摸屏, 否则分数
+  TS_P=$(getevent -p "$1" 2>/dev/null)
+  [ -n "$TS_P" ] || { echo 0; return; }
+  TS_X=; TS_Y=
+  case "$TS_P" in *0035[[:space:]]*:*) TS_X=1;; esac
+  case "$TS_P" in *ABS_MT_POSITION_X*) TS_X=1;; esac
+  case "$TS_P" in *0036[[:space:]]*:*) TS_Y=1;; esac
+  case "$TS_P" in *ABS_MT_POSITION_Y*) TS_Y=1;; esac
+  [ -n "$TS_X" ] && [ -n "$TS_Y" ] || { echo 0; return; }
+  # 只从 0035: 的轴明细行取 max, 不能命中只列代码的摘要行。
+  TS_M=$(printf '%s\n' "$TS_P" | grep -A2 -m1 -E '(^|[[:space:]])0035[[:space:]]*:|ABS_MT_POSITION_X' | grep -m1 'max' | sed -E 's/.*max[^0-9]*([0-9]+).*/\1/')
+  case "$TS_M" in ''|*[!0-9]*) TS_M=0;; esac
+  TS_S=2
+  [ "$TS_M" -gt 20000 ] && TS_S=$((TS_S+2))
+  [ "$TS_M" -gt 80000 ] && TS_S=$((TS_S+2))
+  case "$TS_P" in *Xiaomi_Touch_Input_0*) TS_S=$((TS_S+4));; esac
+  case "$TS_P" in *[Tt][Oo][Uu][Cc][Hh]*) TS_S=$((TS_S+1));; esac
+  echo $TS_S
+}
+disc_touch() {    # 选触摸节点; 输出 TDEV 与 TDEV_HOW(cap|fallback)
+  TDEV=; TDEV_HOW=
+  TD_BEST=; TD_S=0
+  for TD_E in /dev/input/event*; do
+    [ -e "$TD_E" ] || continue
+    TD_SC=$(touch_score "$TD_E")
+    [ "$TD_SC" -gt "$TD_S" ] 2>/dev/null || continue
+    TD_BEST=$TD_E; TD_S=$TD_SC
+  done
+  if [ -n "$TD_BEST" ]; then TDEV=$TD_BEST; TDEV_HOW=cap
+  else TDEV=/dev/input/event8; TDEV_HOW=fallback; fi
+}
+tdev_ok() {       # $1 = 节点; 0 = 确实是可用的触摸设备
+  case "$1" in /dev/input/*) ;; *) return 1;; esac
+  [ -e "$1" ] || return 1
+  [ "$(touch_score "$1")" -gt 0 ] 2>/dev/null
+}
+# ---- TDEV_DISC_END ----
 discdev() {
   TDEV=; BDEV=; PDEV=
   for e in /dev/input/event*; do
     P=$(getevent -p $e 2>/dev/null)
-    case "$P" in *Xiaomi_Touch_Input_0*) [ -z "$TDEV" ] && TDEV=$e;; esac
     case "$P" in *'009e'*) [ -z "$BDEV" ] && BDEV=$e;; esac
     case "$P" in *'0074'*) [ -z "$PDEV" ] && PDEV=$e;; esac
   done
-  [ -z "$TDEV" ] && TDEV=/dev/input/event8
+  disc_touch
 }
 BID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)
 if [ -f $M/dev.conf ] && grep -q "BID=$BID" $M/dev.conf 2>/dev/null; then
@@ -141,10 +190,9 @@ fi
 if [ -n "$TDEV" ] && [ -e "$TDEV" ]; then
   case "$TDEV" in
     /dev/input/*)
-      case "$(getevent -p $TDEV 2>/dev/null)" in
-        *Xiaomi_Touch_Input_0*) ;;
-        *) TDEV=;;
-      esac
+      # 缓存的 event 编号跨启动可能被复用成别的设备(比如变成了耳机 jack),
+      # 按能力复核, 判不出来就重扫。
+      tdev_ok "$TDEV" || TDEV=
       ;;
   esac
 else
@@ -181,6 +229,56 @@ if [ "$(grep -c '^DEV_APPLY=' "$DEVCONF" 2>/dev/null)" = "1" ] \
   DV_SW=$(devpick DEV_SW)
   if [ -n "$DV_SW" ] && [ "$DV_SW" -ge 300 ] 2>/dev/null; then SW=$DV_SW; fi
 fi
+
+# ---------- 非 17 Pro: 按本机几何等比重算宫格 ----------
+# 坐标是「按屏宽归一」的: 注入原语里 x = PAT_x * K, 而 K = 轴max / SW。只要一开
+# 「启用覆盖」, SW 就从 1220 变成本机真实宽度, 那串 17 Pro 的像素数字会被整体按
+# 1220/本机宽度 往内缩 —— 照着「自动检测→启用覆盖→保存」做, Xiaomi 15 Pro 上
+# 图案解锁反而整片画偏(真机反馈:「搁那瞎划拉」)。
+# 处理: 四个值还停在出厂基线 = 没人校准过, 就按本机几何重算; 手动填过
+# DEV_PAT_*/DEV_PIN_* 的一个字节都不动(校准结果永远优先)。
+# 系数优先用 DPI —— 锁屏宫格是按 dp 排版、再按密度换算成像素的, 密度才是决定量;
+# 档案里 DPI 是空的(真机那台 15 Pro 就是空的)才退回屏宽/屏高比。
+# 17 Pro 上系数 = 100, 重算结果与基线逐像素相同, 已验证过的路径一分不差。
+if [ "$DEV_ON" = "1" ]; then
+  KP=; KY=
+  PF_DPI=$(pinpick DEV_DPI)
+  case "$PF_DPI" in ''|*[!0-9]*) PF_DPI=;; esac
+  if [ -n "$PF_DPI" ] && [ "$PF_DPI" -gt 100 ] 2>/dev/null; then
+    KP=$(( PF_DPI * 100 / 520 )); KY=$KP
+  else
+    PF_SW=$(pinpick DEV_SW)
+    PF_SH=$(pinpick DEV_SH)
+    case "$PF_SW" in ''|*[!0-9]*) PF_SW=;; esac
+    case "$PF_SH" in ''|*[!0-9]*) PF_SH=;; esac
+    [ -n "$PF_SW" ] && [ "$PF_SW" -gt 300 ] 2>/dev/null && KP=$(( PF_SW * 100 / 1220 ))
+    [ -n "$PF_SH" ] && [ "$PF_SH" -gt 300 ] 2>/dev/null && KY=$(( PF_SH * 100 / 2656 ))
+  fi
+  case "$KP" in ''|*[!0-9]*) KP=100;; esac
+  case "$KY" in ''|*[!0-9]*) KY=100;; esac
+  if [ "$KP" != "100" ] || [ "$KY" != "100" ]; then
+    # 横向首格中心不按比例缩, 而用「宫格居中」反推: 1220/2-300 = 310 与实测基线
+    # 逐像素相同, 换别的宽度时宫格也跟着居中(锁屏宫格本来就是居中的)。
+    if [ "$PAT_X0" = "310" ] && [ "$PAT_Y0" = "1193" ] \
+       && [ "$PAT_DX" = "300" ] && [ "$PAT_DY" = "300" ]; then
+      PAT_DX=$(( 300 * KP / 100 )); [ "$PAT_DX" -lt 1 ] && PAT_DX=1
+      PAT_DY=$(( 300 * KY / 100 )); [ "$PAT_DY" -lt 1 ] && PAT_DY=1
+      PAT_X0=$(( SW / 2 - PAT_DX )); [ "$PAT_X0" -lt 1 ] && PAT_X0=1
+      PAT_Y0=$(( 1193 * KY / 100 )); [ "$PAT_Y0" -lt 1 ] && PAT_Y0=1
+    fi
+    if [ "$PIN_X0" = "290" ] && [ "$PIN_Y0" = "1015" ] \
+       && [ "$PIN_DX" = "320" ] && [ "$PIN_DY" = "210" ]; then
+      PIN_DX=$(( 320 * KP / 100 )); [ "$PIN_DX" -lt 1 ] && PIN_DX=1
+      PIN_DY=$(( 210 * KY / 100 )); [ "$PIN_DY" -lt 1 ] && PIN_DY=1
+      PIN_X0=$(( SW / 2 - PIN_DX )); [ "$PIN_X0" -lt 1 ] && PIN_X0=1
+      PIN_Y0=$(( 1015 * KY / 100 )); [ "$PIN_Y0" -lt 1 ] && PIN_Y0=1
+    fi
+    echo $(date +%m%d-%H%M) PAT_FIT k=$KP/$KY SW=$SW \
+      PAT=$PAT_X0,$PAT_Y0,$PAT_DX,$PAT_DY PIN=$PIN_X0,$PIN_Y0,$PIN_DX,$PIN_DY >> $LOG
+  fi
+fi
+# ---------- PAT_FIT 段结束 ----------
+
 if [ -n "$TDEV" ] && [ -e "$TDEV" ]; then
   P=$(getevent -p $TDEV 2>/dev/null)
   # 只从 0035: 的轴明细行取 max，避免命中 ABS 摘要行。

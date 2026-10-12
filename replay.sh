@@ -9,15 +9,62 @@ LOGF=$M/log.txt
 [ -n "$2" ] && LOGF=$2
 
 # ---------- 设备/注入原语 (与 service.sh 同源, 缩放 K 与 record.sh 一致) ----------
+# ---- TDEV_DISC_BEGIN 触摸设备发现 (四份拷贝必须逐字一致, 回归第 11 节比对) ----
+# 不能只认设备名: 换个机型触摸控制器的名字就变 (Xiaomi_Touch_Input_0/_1、
+# xiaomi_touch、fts、goodix、synaptics ...), 以前写死 Xiaomi_Touch_Input_0, 找不到
+# 就回落到写死的 event8 —— 那个节点在别的机器上可能是指纹/耳机 jack:
+#   · 解锁: event8 是另一个触摸节点时轴 max 不同, K = 轴max/SW 就算错, 图案整片
+#     画偏 (真机反馈: Xiaomi 15 Pro 用户「图案解锁搁那瞎划拉」); 轴 max <= 20000 时
+#     K 干脆停在 100, 偏得更远。
+#   · 录制: 同一处判据, event8 不存在 -> daemon 秒退 -> 界面只剩「ERR start failed」。
+# 判据改成能力: 必须同时有 ABS_MT 的 X(0035)/Y(0036) 两轴, 分数高者胜出 ——
+# 轴范围越大越可能是主屏触摸 (17 Pro 的 _0 是 121999x265599, _1 只有 90399x57199),
+# 名字只当加分项。一个都判不出来才回落 event8, 并把 TDEV_HOW=fallback 留给调用方记日志。
+touch_score() {  # $1 = /dev/input/eventN; 0 = 不是触摸屏, 否则分数
+  TS_P=$(getevent -p "$1" 2>/dev/null)
+  [ -n "$TS_P" ] || { echo 0; return; }
+  TS_X=; TS_Y=
+  case "$TS_P" in *0035[[:space:]]*:*) TS_X=1;; esac
+  case "$TS_P" in *ABS_MT_POSITION_X*) TS_X=1;; esac
+  case "$TS_P" in *0036[[:space:]]*:*) TS_Y=1;; esac
+  case "$TS_P" in *ABS_MT_POSITION_Y*) TS_Y=1;; esac
+  [ -n "$TS_X" ] && [ -n "$TS_Y" ] || { echo 0; return; }
+  # 只从 0035: 的轴明细行取 max, 不能命中只列代码的摘要行。
+  TS_M=$(printf '%s\n' "$TS_P" | grep -A2 -m1 -E '(^|[[:space:]])0035[[:space:]]*:|ABS_MT_POSITION_X' | grep -m1 'max' | sed -E 's/.*max[^0-9]*([0-9]+).*/\1/')
+  case "$TS_M" in ''|*[!0-9]*) TS_M=0;; esac
+  TS_S=2
+  [ "$TS_M" -gt 20000 ] && TS_S=$((TS_S+2))
+  [ "$TS_M" -gt 80000 ] && TS_S=$((TS_S+2))
+  case "$TS_P" in *Xiaomi_Touch_Input_0*) TS_S=$((TS_S+4));; esac
+  case "$TS_P" in *[Tt][Oo][Uu][Cc][Hh]*) TS_S=$((TS_S+1));; esac
+  echo $TS_S
+}
+disc_touch() {    # 选触摸节点; 输出 TDEV 与 TDEV_HOW(cap|fallback)
+  TDEV=; TDEV_HOW=
+  TD_BEST=; TD_S=0
+  for TD_E in /dev/input/event*; do
+    [ -e "$TD_E" ] || continue
+    TD_SC=$(touch_score "$TD_E")
+    [ "$TD_SC" -gt "$TD_S" ] 2>/dev/null || continue
+    TD_BEST=$TD_E; TD_S=$TD_SC
+  done
+  if [ -n "$TD_BEST" ]; then TDEV=$TD_BEST; TDEV_HOW=cap
+  else TDEV=/dev/input/event8; TDEV_HOW=fallback; fi
+}
+tdev_ok() {       # $1 = 节点; 0 = 确实是可用的触摸设备
+  case "$1" in /dev/input/*) ;; *) return 1;; esac
+  [ -e "$1" ] || return 1
+  [ "$(touch_score "$1")" -gt 0 ] 2>/dev/null
+}
+# ---- TDEV_DISC_END ----
 discdev() {
   TDEV=; BDEV=; PDEV=
   for e in /dev/input/event*; do
     P=$(getevent -p $e 2>/dev/null)
-    case "$P" in *Xiaomi_Touch_Input_0*) [ -z "$TDEV" ] && TDEV=$e;; esac
     case "$P" in *'009e'*) [ -z "$BDEV" ] && BDEV=$e;; esac
     case "$P" in *'0074'*) [ -z "$PDEV" ] && PDEV=$e;; esac
   done
-  [ -z "$TDEV" ] && TDEV=/dev/input/event8
+  disc_touch
 }
 BID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)
 if [ -f $M/dev.conf ] && grep -q "BID=$BID" $M/dev.conf 2>/dev/null; then
@@ -26,10 +73,8 @@ fi
 if [ -n "$TDEV" ] && [ -e "$TDEV" ]; then
   case "$TDEV" in
     /dev/input/*)
-      case "$(getevent -p $TDEV 2>/dev/null)" in
-        *Xiaomi_Touch_Input_0*) ;;
-        *) TDEV=;;
-      esac
+      # 缓存的 event 编号跨启动可能复用成别的设备, 按能力复核。
+      tdev_ok "$TDEV" || TDEV=
       ;;
   esac
 else
@@ -40,10 +85,7 @@ if [ -z "$TDEV" ] || [ ! -e "$TDEV" ]; then
   { echo "BID=$BID"; echo "TDEV=$TDEV"; echo "BDEV=$BDEV"; echo "PDEV=$PDEV"; } > $M/dev.conf 2>/dev/null
 fi
 # 没有可确认的触摸设备时必须失败，不能让 sendevent 报错后仍标记回放成功。
-case "$TDEV" in
-  /dev/input/*) case "$(getevent -p "$TDEV" 2>/dev/null)" in *Xiaomi_Touch_Input_0*) ;; *) echo "ERR touch device unavailable" >&2; exit 2;; esac;;
-  *) echo "ERR touch device unavailable" >&2; exit 2;;
-esac
+tdev_ok "$TDEV" || { echo "ERR touch device unavailable" >&2; exit 2; }
 
 # 缩放 K = 轴max / 屏宽 (与 record.sh 相同推导; 缺省 100)
 K=100

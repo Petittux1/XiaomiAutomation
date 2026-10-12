@@ -1,4 +1,9 @@
 #!/system/bin/sh
+# PATH: 本脚本经常被桥 (WebUI / ksud / Magisk 模块) 以 root 拉起, 那时的 PATH 由
+# 宿主决定, 有的宿主不含 /system/bin —— 缺了它 setsid/getevent/dumpsys 全都找不到,
+# 表现就是「点开始录制没有任何反应」。先把标准路径补在最前面, 再交给业务逻辑。
+PATH=/system/bin:/system/xbin:/sbin:/vendor/bin:$PATH
+export PATH
 # icbc_daily_water / record.sh v0.9.6  操作录制内核
 # 纯 root 后台录制: getevent 读触摸事件流 -> 压缩成动作序列 actions.rx
 # 用法: record.sh start PROFILE | stop PROFILE | status
@@ -70,6 +75,55 @@ acquire_start_lock() {
   return 0
 }
 
+# ---- TDEV_DISC_BEGIN 触摸设备发现 (四份拷贝必须逐字一致, 回归第 11 节比对) ----
+# 不能只认设备名: 换个机型触摸控制器的名字就变 (Xiaomi_Touch_Input_0/_1、
+# xiaomi_touch、fts、goodix、synaptics ...), 以前写死 Xiaomi_Touch_Input_0, 找不到
+# 就回落到写死的 event8 —— 那个节点在别的机器上可能是指纹/耳机 jack:
+#   · 解锁: event8 是另一个触摸节点时轴 max 不同, K = 轴max/SW 就算错, 图案整片
+#     画偏 (真机反馈: Xiaomi 15 Pro 用户「图案解锁搁那瞎划拉」); 轴 max <= 20000 时
+#     K 干脆停在 100, 偏得更远。
+#   · 录制: 同一处判据, event8 不存在 -> daemon 秒退 -> 界面只剩「ERR start failed」。
+# 判据改成能力: 必须同时有 ABS_MT 的 X(0035)/Y(0036) 两轴, 分数高者胜出 ——
+# 轴范围越大越可能是主屏触摸 (17 Pro 的 _0 是 121999x265599, _1 只有 90399x57199),
+# 名字只当加分项。一个都判不出来才回落 event8, 并把 TDEV_HOW=fallback 留给调用方记日志。
+touch_score() {  # $1 = /dev/input/eventN; 0 = 不是触摸屏, 否则分数
+  TS_P=$(getevent -p "$1" 2>/dev/null)
+  [ -n "$TS_P" ] || { echo 0; return; }
+  TS_X=; TS_Y=
+  case "$TS_P" in *0035[[:space:]]*:*) TS_X=1;; esac
+  case "$TS_P" in *ABS_MT_POSITION_X*) TS_X=1;; esac
+  case "$TS_P" in *0036[[:space:]]*:*) TS_Y=1;; esac
+  case "$TS_P" in *ABS_MT_POSITION_Y*) TS_Y=1;; esac
+  [ -n "$TS_X" ] && [ -n "$TS_Y" ] || { echo 0; return; }
+  # 只从 0035: 的轴明细行取 max, 不能命中只列代码的摘要行。
+  TS_M=$(printf '%s\n' "$TS_P" | grep -A2 -m1 -E '(^|[[:space:]])0035[[:space:]]*:|ABS_MT_POSITION_X' | grep -m1 'max' | sed -E 's/.*max[^0-9]*([0-9]+).*/\1/')
+  case "$TS_M" in ''|*[!0-9]*) TS_M=0;; esac
+  TS_S=2
+  [ "$TS_M" -gt 20000 ] && TS_S=$((TS_S+2))
+  [ "$TS_M" -gt 80000 ] && TS_S=$((TS_S+2))
+  case "$TS_P" in *Xiaomi_Touch_Input_0*) TS_S=$((TS_S+4));; esac
+  case "$TS_P" in *[Tt][Oo][Uu][Cc][Hh]*) TS_S=$((TS_S+1));; esac
+  echo $TS_S
+}
+disc_touch() {    # 选触摸节点; 输出 TDEV 与 TDEV_HOW(cap|fallback)
+  TDEV=; TDEV_HOW=
+  TD_BEST=; TD_S=0
+  for TD_E in /dev/input/event*; do
+    [ -e "$TD_E" ] || continue
+    TD_SC=$(touch_score "$TD_E")
+    [ "$TD_SC" -gt "$TD_S" ] 2>/dev/null || continue
+    TD_BEST=$TD_E; TD_S=$TD_SC
+  done
+  if [ -n "$TD_BEST" ]; then TDEV=$TD_BEST; TDEV_HOW=cap
+  else TDEV=/dev/input/event8; TDEV_HOW=fallback; fi
+}
+tdev_ok() {       # $1 = 节点; 0 = 确实是可用的触摸设备
+  case "$1" in /dev/input/*) ;; *) return 1;; esac
+  [ -e "$1" ] || return 1
+  [ "$(touch_score "$1")" -gt 0 ] 2>/dev/null
+}
+# ---- TDEV_DISC_END ----
+
 # 设备解析: 在当前 shell 内设置 TDEV (须直接调用, 不能放 $(...) 子 shell 里)
 disc_tdev() {
   TDEV=; BDEV=; PDEV=
@@ -77,27 +131,17 @@ disc_tdev() {
   if [ -f $M/dev.conf ] && grep -q "BID=$BID" $M/dev.conf 2>/dev/null; then
     . $M/dev.conf 2>/dev/null
   fi
-  # event 编号跨启动可能复用；缓存节点存在不等于仍是触摸屏，需复核 name。
+  # event 编号跨启动可能复用；缓存节点存在不等于仍是触摸屏，按能力复核。
   if [ -n "$TDEV" ] && [ -e "$TDEV" ]; then
     case "$TDEV" in
       /dev/input/*)
-        case "$(getevent -p $TDEV 2>/dev/null)" in
-          *Xiaomi_Touch_Input_0*) ;;
-          *) TDEV=;;
-        esac
+        tdev_ok "$TDEV" || TDEV=
         ;;
     esac
   else
     TDEV=
   fi
-  if [ -z "$TDEV" ]; then
-    for e in /dev/input/event*; do
-      case "$(getevent -p $e 2>/dev/null)" in
-        *Xiaomi_Touch_Input_0*) [ -z "$TDEV" ] && TDEV=$e;;
-      esac
-    done
-    [ -z "$TDEV" ] && TDEV=/dev/input/event8
-  fi
+  [ -n "$TDEV" ] || disc_touch
 }
 
 # 设备几何: 当前 shell 内设置 K/SW/SH (像素宽/高)。K = 轴max / 屏宽SW, 自适应。
@@ -352,15 +396,29 @@ start() {
         ;;
     esac
   fi
+  # 起不来的两种硬原因先自己拦下, 不让它们伪装成一句「start failed」。
+  command -v setsid >/dev/null 2>&1 || { echo "ERR start failed: PATH 里没有 setsid"; exit 1; }
+  command -v getevent >/dev/null 2>&1 || { echo "ERR start failed: PATH 里没有 getevent"; exit 1; }
   rm -f $TMP
   # 后台 daemon (setsid 脱离, 退出终端不影响; daemon 自写 pid 到 $PIDF)
+  # [ -f ] 先判再读: 全新安装还没有 rec.log, 直接 `wc -l < $LOG` 会由 shell 抢在
+  # 2>/dev/null 生效之前往 stderr 漏一句 "cannot open ... rec.log"。
+  LOGN0=0
+  [ -f "$LOG" ] && LOGN0=$(wc -l < "$LOG" 2>/dev/null)
   setsid sh $M/record.sh _daemon $N </dev/null >>$LOG 2>&1 &
   sleep 1
   if [ -f $PIDF ] && kill -0 $(cat $PIDF 2>/dev/null) 2>/dev/null; then
     log "REC_START $N"
     echo "REC_START $N pid=$(cat $PIDF)"
   else
-    echo "ERR start failed"; exit 1
+    # 把 daemon 的真实死因带出来: 老版只回一句 ERR start failed, 用户报障时我们看不到
+    # rec.log, 等于没有线索 —— 真机上「几个人说没法录取」就卡在这一步排查不下去。
+    RECWHY=$(tail -n +$(( ${LOGN0:-0} + 1 )) "$LOG" 2>/dev/null | grep -v ' RAW[0-9]' | grep -v '^$' | tail -2)
+    case "$RECWHY" in
+      '') echo "ERR start failed: 后台没起来也没留日志, 请把 'sh record.sh start <任务>' 的输出发给作者";;
+      *)  echo "ERR start failed: $(printf '%s\n' "$RECWHY" | tail -1 | sed 's/^[0-9]*-[0-9]* //')";;
+    esac
+    exit 1
   fi
 }
 

@@ -1,4 +1,9 @@
 #!/system/bin/sh
+# PATH: 本脚本由 KSU 管理器 WebView 以 root 调起, 那时的 PATH 由宿主决定, 有的宿主
+# 不含 /system/bin —— 缺了它 wm/getevent/dumpsys 全都找不到, 「自动检测本机」会静默
+# 返回「未检测到」。先把标准路径补在最前面。
+PATH=/system/bin:/system/xbin:/sbin:/vendor/bin:$PATH
+export PATH
 # icbc_daily_water / webctl.sh v0.13.0 - WebUI 助手 (由 KSU 管理器 WebView 以 root 调用)
 # 用法: webctl.sh status|setpin|setpattern|settime|setdays|setenable|setmode|setopen|
 #        setsleep|setwatch|setcleanup|unlock|trigger[NAME]|restart|log|profiles|
@@ -360,8 +365,42 @@ dev_detect() {
   # 显示 ID: 多数机型的 screencap -d 用 0, 探测不到就报 0, 由用户核对。
   # 只在真拿到尺寸时才报 —— 检测整体失败时若仍回 0, 会把用户手填的显示 ID 抹成 0。
   [ -n "$DSW" ] && echo "DEV_D=0"
-  # 锁屏键盘宫格无法自动可靠识别, 明确告知需要手动填。
-  echo "DEV_PIN_HINT=manual"
+  # 锁屏宫格的像素位置没法从系统里读出来, 但能用「同一把换算」给出建议值:
+  # 宫格是按 dp 排版、再按密度换算成像素的, 密度(没有就分辨率)才是决定量 ——
+  # 检测到非 17 Pro 的几何时按比例预填, 「自动检测→启用覆盖→保存」这条路就能直接
+  # 用, 之后再用「测试解锁」微调; 几何与基线相同就什么都不回, 档案保持 17 Pro 实测值。
+  # 换算规则必须与 service.sh 的 PAT_FIT 段一致 (回归第 11 节两处一起比对)。
+  FK=; FY=
+  if [ -n "$DDP" ] && [ "$DDP" -gt 100 ] 2>/dev/null; then
+    FK=$(( DDP * 100 / 520 )); FY=$FK
+  elif [ -n "$DSW" ] && [ -n "$DSH" ]; then
+    [ "$DSW" -gt 300 ] 2>/dev/null && FK=$(( DSW * 100 / 1220 ))
+    [ "$DSH" -gt 300 ] 2>/dev/null && FY=$(( DSH * 100 / 2656 ))
+  fi
+  case "$FK" in ''|*[!0-9]*) FK=100;; esac
+  case "$FY" in ''|*[!0-9]*) FY=100;; esac
+  if { [ "$FK" != "100" ] || [ "$FY" != "100" ]; } && [ -n "$DSW" ] && [ "$DSW" -gt 300 ] 2>/dev/null; then
+    FPDX=$(( 300 * FK / 100 )); [ "$FPDX" -lt 1 ] && FPDX=1
+    FPDY=$(( 300 * FY / 100 )); [ "$FPDY" -lt 1 ] && FPDY=1
+    FPX0=$(( DSW / 2 - FPDX )); [ "$FPX0" -lt 1 ] && FPX0=1
+    FPY0=$(( 1193 * FY / 100 )); [ "$FPY0" -lt 1 ] && FPY0=1
+    echo "DEV_PAT_HINT=fitted"
+    echo "DEV_PAT_X0=$FPX0"
+    echo "DEV_PAT_Y0=$FPY0"
+    echo "DEV_PAT_DX=$FPDX"
+    echo "DEV_PAT_DY=$FPDY"
+    FKDX=$(( 320 * FK / 100 )); [ "$FKDX" -lt 1 ] && FKDX=1
+    FKDY=$(( 210 * FY / 100 )); [ "$FKDY" -lt 1 ] && FKDY=1
+    FKX0=$(( DSW / 2 - FKDX )); [ "$FKX0" -lt 1 ] && FKX0=1
+    FKY0=$(( 1015 * FY / 100 )); [ "$FKY0" -lt 1 ] && FKY0=1
+    echo "DEV_PIN_X0=$FKX0"
+    echo "DEV_PIN_Y0=$FKY0"
+    echo "DEV_PIN_DX=$FKDX"
+    echo "DEV_PIN_DY=$FKDY"
+  else
+    # 锁屏键盘宫格无法自动可靠识别, 明确告知需要手动填。
+    echo "DEV_PIN_HINT=manual"
+  fi
   # 机型名尝试从 ro.product.model 取
   DMODEL=$(getprop ro.product.model 2>/dev/null | tr -d '\r\n' | sed 's/[^A-Za-z0-9_.-]/_/g')
   [ -n "$DMODEL" ] && echo "DEV_MODEL=$DMODEL"

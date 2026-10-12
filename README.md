@@ -86,7 +86,7 @@ PIN 刻意**只接受环境变量 `WEBUI_PIN`**，不接受命令行参数，这
 
 ## 安装
 
-1. 从 Releases 下载 `XiaomiAutomation-v0.13.3.zip`。
+1. 从 Releases 下载 `XiaomiAutomation-v0.13.4.zip`。
 2. 在 KernelSU / Magisk 中刷入该 zip。
 3. 重启设备后打开模块 WebUI，按需设置解锁方式和 PIN。
 4. 首次使用录制任务时，填写目标 App 包名；切到该 App 后点击「开始录制」，操作完成后点击「停止录制」。
@@ -210,7 +210,7 @@ bash tools/build_zip.sh
 脚本会在仓库父目录生成：
 
 ```text
-XiaomiAutomation-v0.13.3.zip
+XiaomiAutomation-v0.13.4.zip
 ```
 
 ## 许可证

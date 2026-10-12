@@ -506,6 +506,138 @@ esac
 rm -rf "$UPD"
 
 
+# ============ 13. 非 17 Pro: 宫格按本机几何等比重算 ============
+# 真机反馈: 照着「自动检测→启用覆盖→保存」做, Xiaomi 15 Pro 上图案解锁整片画偏 ——
+# 坐标是按屏宽归一的 (注入时 x = PAT_x * K, K = 轴max/SW), 一开覆盖 SW 就从 1220
+# 变成本机宽度, 那串 17 Pro 的像素数字被整体往内缩。修法在 service.sh 的 PAT_FIT 段。
+#
+# 这里不跑整个 service.sh (它会拉起常驻循环、还会 sendevent), 而是把被测段落连同它
+# 依赖的 pinpick 从 service.sh **原文里抠出来**跑 —— 跑的是仓库里的字节, 不是抄一份;
+# 抄的那一份挡不住回归。
+sec "13. 非 17 Pro: 宫格按本机几何等比重算"
+
+PATFIT_LIB="$W/patfit_lib.sh"
+awk '/^pinpick\(\) \{/,/^\}/' service.sh > "$PATFIT_LIB"
+awk '/^# ---------- 非 17 Pro: 按本机几何等比重算宫格 ----------/,/^# ---------- PAT_FIT 段结束 ----------/' \
+  service.sh >> "$PATFIT_LIB"
+PFL=$(wc -l < "$PATFIT_LIB" 2>/dev/null || echo 0)
+if [ "$PFL" -gt 30 ] && [ "$PFL" -lt 120 ] && grep -q 'PAT_FIT' "$PATFIT_LIB"; then
+  ok "从 service.sh 抠出 pinpick + PAT_FIT 段 ($PFL 行)"
+else
+  fail "抠 PAT_FIT 段失败 (只有 $PFL 行, 期望 30~120)"
+fi
+
+pf_devconf() {  # pf_devconf DPI DEV_SW DEV_SH —— 空值不写该键
+  {
+    [ -n "$1" ] && echo "DEV_DPI=$1"
+    [ -n "$2" ] && echo "DEV_SW=$2"
+    [ -n "$3" ] && echo "DEV_SH=$3"
+  } > "$W/device.conf"
+}
+run_patfit() {  # run_patfit DEV_ON SW [PAT_X0] -> PAT=... / PIN=...
+  {
+    echo "#!/system/bin/sh"
+    echo "PINCONF=$W/device.conf"
+    echo "LOG=$W/patfit.log"
+    echo "PAT_X0=${3:-310}; PAT_Y0=1193; PAT_DX=300; PAT_DY=300"
+    echo "PIN_X0=290; PIN_Y0=1015; PIN_DX=320; PIN_DY=210"
+    echo "DEV_ON=$1"
+    echo "SW=$2"
+    echo ". $PATFIT_LIB"
+    echo "echo \"PAT=\$PAT_X0,\$PAT_Y0,\$PAT_DX,\$PAT_DY\""
+    echo "echo \"PIN=\$PIN_X0,\$PIN_Y0,\$PIN_DX,\$PIN_DY\""
+  } > "$W/patfit_run.sh"
+  sh "$W/patfit_run.sh"
+}
+pget() { printf '%s' "$1" | grep -m1 "^$2=" | cut -d= -f2; }
+
+# 17 Pro 自己: 密度 520 / 1220×2656, 系数 100, 重算后必须与基线逐像素相同
+pf_devconf 520 1220 2656
+OUT=$(run_patfit 1 1220)
+[ "$(pget "$OUT" PAT)" = "310,1193,300,300" ] && ok "17 Pro 上重算结果 = 基线 (零回归)" \
+  || fail "17 Pro 上被改写了: $(pget "$OUT" PAT)"
+[ "$(pget "$OUT" PIN)" = "290,1015,320,210" ] && ok "17 Pro 上 PIN 宫格也是基线" \
+  || fail "17 Pro 上 PIN 被改写: $(pget "$OUT" PIN)"
+
+# 换机 + 档案里有 DPI: 按密度换算 (锁屏宫格是 dp 排版, 密度才是决定量)
+# 600/520 = 115% -> 格距 345, 首格 X 用「宫格居中」反推 1440/2-345 = 375
+pf_devconf 600 1440 3200
+OUT=$(run_patfit 1 1440)
+[ "$(pget "$OUT" PAT)" = "375,1371,345,345" ] && ok "DPI=600 时图案宫格按密度换算" \
+  || fail "DPI=600 换算错: $(pget "$OUT" PAT) (期望 375,1371,345,345)"
+[ "$(pget "$OUT" PIN)" = "352,1167,368,241" ] && ok "DPI=600 时 PIN 宫格跟着换算" \
+  || fail "DPI=600 PIN 换算错: $(pget "$OUT" PIN) (期望 352,1167,368,241)"
+# 宫格必须仍然居中: 首格 + 2×格距 到右边的距离 == 首格到左边的距离
+PX0=$(pget "$OUT" PAT | cut -d, -f1); PDX=$(pget "$OUT" PAT | cut -d, -f3)
+[ $(( PX0 + 2 * PDX )) -eq $(( 1440 - PX0 )) ] && ok "换算后宫格仍然居中" \
+  || fail "换算后宫格不居中: X0=$PX0 DX=$PDX 宽=1440"
+
+# 档案里 DPI 是空的 (真机那台 15 Pro 就是空的): 退回屏宽/屏高比, 照样给出建议值
+pf_devconf "" 1440 3200
+OUT=$(run_patfit 1 1440)
+[ "$(pget "$OUT" PAT)" = "366,1431,354,360" ] && ok "DPI 空时退回分辨率比换算" \
+  || fail "DPI 空时换算错: $(pget "$OUT" PAT) (期望 366,1431,354,360)"
+
+# 总闸关着 (DEV_ON=0, 默认的 17 Pro 路径): 一个字节都不许动
+pf_devconf 600 1440 3200
+OUT=$(run_patfit 0 1220)
+[ "$(pget "$OUT" PAT)" = "310,1193,300,300" ] && ok "启用覆盖关闭时不换算 (老路径不动)" \
+  || fail "DEV_ON=0 也被换算了: $(pget "$OUT" PAT)"
+
+# 用户手动校准过 (PAT_X0 已经不是基线): 视为已校准, 重算必须让路
+pf_devconf 600 1440 3200
+OUT=$(run_patfit 1 1440 333)
+[ "$(pget "$OUT" PAT)" = "333,1193,300,300" ] && ok "手动校准过的值不被重算覆盖" \
+  || fail "手动校准值被重算吃掉了: $(pget "$OUT" PAT)"
+
+# 换算过程要留痕, 否则「为什么坐标变了」又变成无头公案
+grep -q 'PAT_FIT' "$W/patfit.log" 2>/dev/null && ok "换算在日志里留了 PAT_FIT 行" \
+  || fail "换算没有写日志"
+
+
+# ============ 14. 录制起不来时报得出死因 ============
+# 真机反馈:「有几个人说没法录取」, 界面只弹一句 ERR start failed —— 用户看不到
+# rec.log, 我们也看不到, 等于没法排查。修法是让 start() 把 daemon 的死因带出来。
+#
+# 怎么造「起不来」: record.sh 一开头就把 PATH 固定成标准路径, 没法从外面抽掉工具,
+# 所以在沙箱副本里把假目录插到 PATH 最前面 —— 假 getevent 立刻返回(一个事件都没有),
+# 假 dumpsys/svc 也立刻返回, daemon 走到主循环就结束, start 必须报得出原因。
+# 假 svc 还有一层作用: 不让它真去改本机的常亮设置。
+sec "14. 录制起不来时报得出死因"
+
+cp record.sh "$M/record.sh"
+sed -i \
+  -e "s#/data/adb/modules/icbc_daily_water#$M#g" \
+  -e "s#/data/adb/icbc_water#$W#g" \
+  "$M/record.sh"
+mkdir -p "$W/fakebin"
+for t in getevent dumpsys svc; do
+  printf '#!/system/bin/sh\nexit 0\n' > "$W/fakebin/$t"
+done
+printf '#!/system/bin/sh\nexec "$@"\n' > "$W/fakebin/setsid"
+chmod 755 "$W/fakebin"/*
+sed -i "s#^PATH=/system/bin:/system/xbin:/sbin:/vendor/bin:\$PATH#PATH=$W/fakebin:/system/bin:/system/xbin:/sbin:/vendor/bin:\$PATH#" "$M/record.sh"
+grep -q "^PATH=$W/fakebin" "$M/record.sh" && ok "沙箱副本把假工具目录插到了 PATH 最前面" \
+  || fail "没能改写沙箱副本的 PATH, 下面这条测不了"
+
+mkdir -p "$W/profiles/demo14"
+{ echo "P_NAME=demo14"; echo "P_TYPE=record"; echo "P_PKG=com.example.app"; } > "$W/profiles/demo14/conf"
+OUT=$(sh "$M/record.sh" start demo14 2>&1); RC=$?
+[ "$RC" != "0" ] && ok "起不来时 rc 非 0" || fail "起不来却返回 0 —— 界面会当成录制成功"
+case "$OUT" in
+  "ERR start failed") fail "仍然只有干巴巴一句 ERR start failed" ;;
+  "ERR start failed: "*) ok "死因被带出来了: $(printf '%s' "$OUT" | cut -c1-72)" ;;
+  *) fail "输出不是预期的 ERR start failed:... -> $OUT" ;;
+esac
+# daemon 没起来时, 状态必须如实说「没在录」, 不能拿残留的 pid 文件说事
+OUT=$(sh "$M/record.sh" status 2>&1)
+case "$OUT" in
+  recording=yes*) fail "daemon 已死, status 却说在录: $(printf '%s' "$OUT" | head -1)" ;;
+  *) ok "status 如实报告没有在录" ;;
+esac
+rm -f "$M/record.sh"
+
+
 # ============ 汇总 ============
 printf '\n'
 if [ "$FAILS" = "0" ]; then

@@ -8,7 +8,7 @@
 #   所以这次改成把不变量直接写成断言: 不需要沙箱, 不需要预先录好的输出,
 #   任何时候 clone 下来都能跑, 再丢一次也无所谓。
 #
-# 十条守卫各挡一类真实发生过/差一点发生的事故:
+# 十一条守卫各挡一类真实发生过/差一点发生的事故:
 #   1) water.sh 的 17 Pro 基线取值 —— 防「顺手改坐标/阈值」把唯一实测过的机型改挂
 #   2) service.sh 的单命中          —— 防同一天浇两次(重复触发是最恶劣的失败模式)
 #   3) app.js 的 DOM 引用           —— 防删元素后白屏(删 card.time 时真的会踩到)
@@ -21,6 +21,9 @@
 #   8) 图案宫格默认坐标 + 安装脚本 MODDIR 兜底 —— 防坐标被「优化」回估算值(v0.13.1 踩过)
 #   9) 测试解锁防假通过 + 新版本待重启提示 —— 防「画偏了也报成功」「显示新版、跑旧行为」
 #   10) 版本角标取真实版本 + 概览区卡片删干净 —— 防角标又写死旧版本号(v0.13.2 踩过)
+#   11) 触摸设备按能力发现 + 录制失败报得出死因 —— 防「只认一个设备名」把别的机型
+#       挡在门外。真机两条反馈是同一处根因: 几个人说没法录取(event8 不存在 -> FATAL)、
+#       Xiaomi 15 Pro 图案解锁瞎划拉(event8 是另一个触摸节点 -> K 算错)。v0.13.4 修
 #
 # 用法: bash tools/test_regression.sh          (在仓库根目录)
 # 退出码: 0 = 全绿, 1 = 有守卫失败
@@ -748,6 +751,143 @@ if grep -q '「展开全部 / 收起全部」一键切换' README.md \
   fail "README 还在承诺已删除的「展开全部 / 收起全部」"
 else
   ok "README 不再承诺已删除的总开关按钮"
+fi
+
+
+# ============ 11. 触摸设备按能力发现 + 录制失败要说得出原因 ============
+sec "11. 触摸设备按能力发现, 录制失败报得出死因"
+
+# 真机反馈两条, 根因是同一处:
+#   ① 「有几个人说没法录取」—— 点开始录制弹 ERR start failed;
+#   ② 「小米 15 Pro 图案解锁搁那瞎划拉」—— 解锁手势整片偏移。
+# 旧判据只认设备名 Xiaomi_Touch_Input_0, 找不到就回落到写死的 event8: 那个节点在
+# 别的机器上可能是指纹/耳机 jack (录不到 -> FATAL -> start failed), 也可能是另一个
+# 触摸节点 (轴 max 不同 -> K = 轴max/SW 算错 -> 图案整片偏)。改成按能力打分。
+
+TDBLK=$(mktemp "${TMPDIR:-/data/data/com.termux/files/usr/tmp}/td.XXXXXX")
+TDBLK2=$(mktemp "${TMPDIR:-/data/data/com.termux/files/usr/tmp}/td.XXXXXX")
+FIRST=
+SAME=all
+for f in service.sh record.sh replay.sh water.sh; do
+  awk '/TDEV_DISC_BEGIN/,/TDEV_DISC_END/' "$f" > "$TDBLK"
+  n=$(wc -l < "$TDBLK" | tr -d ' ')
+  if [ "${n:-0}" -lt 10 ]; then
+    fail "$f 里没有 TDEV_DISC 块"
+    SAME=missing
+    continue
+  fi
+  if [ -z "$FIRST" ]; then FIRST="$f"; cp "$TDBLK" "$TDBLK2"; fi
+  if cmp -s "$TDBLK" "$TDBLK2"; then :; else SAME=diff; fi
+done
+[ "$SAME" = "all" ] && ok "四份触摸设备发现块逐字一致 (service/record/replay/water)" \
+  || fail "四份触摸设备发现块不一致 —— 分头改必然漏一家"
+rm -f "$TDBLK" "$TDBLK2"
+
+# 块外不许再有按名字判定的残留 (块内那一行是「加分项」, 不是判据)
+OUTF=$(mktemp "${TMPDIR:-/data/data/com.termux/files/usr/tmp}/nb.XXXXXX")
+for f in service.sh record.sh replay.sh water.sh; do
+  awk '/TDEV_DISC_BEGIN/{inb=1} /TDEV_DISC_END/{inb=0; next} !inb' "$f" > "$OUTF"
+  n=$(gc 'Xiaomi_Touch_Input_0' "$OUTF")
+  [ "${n:-0}" = "0" ] && ok "$f 块外没有按设备名判定的残留" \
+    || fail "$f 块外还按设备名判定 ($n 处) —— 换个机型就判不出触摸屏"
+done
+rm -f "$OUTF"
+
+for f in service.sh record.sh replay.sh water.sh; do
+  a=$(gc 'disc_touch' "$f"); b=$(gc 'tdev_ok' "$f")
+  [ "${a:-0}" -ge 1 ] && [ "${b:-0}" -ge 1 ] && ok "$f 用 disc_touch/tdev_ok 选设备" \
+    || fail "$f 没用新的选法 (disc_touch=$a tdev_ok=$b)"
+done
+# 老的 event8 兜底必须留着: 判不出任何触摸设备时, 老机型上它可能就是对的
+EV8=0
+for f in service.sh record.sh replay.sh water.sh; do
+  n=$(gc 'TDEV=/dev/input/event8' "$f"); EV8=$(( EV8 + ${n:-0} ))
+done
+[ "${EV8:-0}" -ge 4 ] && ok "四份都保留 event8 兜底 + fallback 留痕" \
+  || fail "event8 兜底只剩 $EV8 处, 判不出触摸设备时会直接没设备可用"
+
+# 桥拉起时 PATH 由宿主决定, 缺 /system/bin 时 setsid/getevent 全都找不到 ——
+# 表现就是「点开始录制没有任何反应」「自动检测静默返回未检测到」。
+for f in webctl.sh record.sh; do
+  if grep -qF 'PATH=/system/bin:/system/xbin:/sbin:/vendor/bin:$PATH' "$f"; then
+    ok "$f 补齐了标准 PATH"
+  else
+    fail "$f 没有补 PATH —— 宿主 PATH 缺 /system/bin 时整条链路静默失败"
+  fi
+done
+
+# start() 起不来时必须把 daemon 的真实死因带出来, 否则报障只有一句「start failed」,
+# 看不到 rec.log 就等于查不下去 (真机上「几个人说没法录取」就卡在这一步)。
+if grep -q 'PATH 里没有 setsid' record.sh && grep -q 'PATH 里没有 getevent' record.sh; then
+  ok "start 先自检 setsid/getevent, 缺了就直说"
+else
+  fail "record.sh start 没有 setsid/getevent 预检"
+fi
+if grep -q 'RECWHY' record.sh && grep -q 'ERR start failed: ' record.sh \
+   && grep -q 'RAW\[0-9\]' record.sh; then
+  ok "start 失败时把 rec.log 里 daemon 的死因带出来"
+else
+  fail "record.sh start 仍是干巴巴一句 ERR start failed"
+fi
+
+# 自动检测要能给出「按同一把换算」预填的建议值, 否则用户照着「自动检测→启用覆盖」
+# 走完, 存下来的还是 17 Pro 的像素值, 换算基准却已经变了。
+if grep -q 'DEV_PAT_HINT=fitted' webctl.sh && grep -q 'DEV_PAT_X0=' webctl.sh \
+   && grep -q 'DEV_PIN_X0=' webctl.sh; then
+  ok "dev_detect 会按几何预填图案/PIN 宫格建议值"
+else
+  fail "dev_detect 不给宫格建议值 —— 换机用户保存下来的仍是 17 Pro 坏值"
+fi
+if grep -q "d.DEV_PAT_X0" webroot/app.js && grep -q "d.DEV_PIN_X0" webroot/app.js; then
+  ok "devDetect 把建议值回填进八个格子"
+else
+  fail "app.js devDetect 不回填建议值, 界面上看不见"
+fi
+
+# 服务端换算: 只在「四值还是出厂基线」时才动, 手动校准过的值必须原样保留
+if grep -q 'PAT_FIT' service.sh && grep -qF '"310" ] && [ "$PAT_Y0" = "1193"' service.sh; then
+  ok "service.sh 有 PAT_FIT 段, 且只在仍是基线时重算"
+else
+  fail "service.sh 缺 PAT_FIT, 或没有基线守卫 —— 会把用户校准过的值改掉"
+fi
+if grep -q 'DEV_ON' service.sh && grep -q 'pinpick DEV_DPI' service.sh; then
+  ok "换算系数优先用 DPI, 档案 DPI 为空才退回分辨率比"
+else
+  fail "换算系数的取值链不完整"
+fi
+# 界面预填值和服务端实际用的值必须出自同一套换算, 否则「检测到的」和「生效的」对不上
+RC_OK=1
+for c in '100 / 520' '1193 * ' '320 * ' '210 * ' ' 2 - '; do
+  grep -qF "$c" service.sh || RC_OK=0
+  grep -qF "$c" webctl.sh || RC_OK=0
+done
+[ "$RC_OK" = "1" ] && ok "webctl 预填与 service 换算用同一套常数" \
+  || fail "两处换算常数不同源 —— 界面显示的值和真正生效的值会不一致"
+
+# 用户问「左标对应的分别是啥呀，咋手动校准」: 字段必须有标签和校准说明
+for k in dev.kx0 dev.ky0 dev.kdx dev.kdy dev.px0 dev.py0 dev.pdx dev.pdy; do
+  n=$(gc "data-i18n=\"$k\"" webroot/index.html)
+  [ "${n:-0}" = "1" ] && ok "index.html 给 $k 配了可见标签" \
+    || fail "index.html 的 $k 没有可见标签 (出现 $n 次)"
+done
+for k in dev.pin.hint dev.pat.hint; do
+  n=$(gc "data-i18n=\"$k\"" webroot/index.html)
+  [ "${n:-0}" = "1" ] && ok "index.html 有 $k 校准说明" \
+    || fail "index.html 缺 $k 校准说明"
+done
+n=$(gc 'aria-label="X0"' webroot/index.html)
+[ "${n:-0}" = "0" ] && ok "八个宫格字段不再是只有 aria-label 的裸输入框" \
+  || fail "还有只有 aria-label 的裸数字框, 读屏之外没人知道它是什么"
+
+for k in dev.kx0 dev.ky0 dev.kdx dev.kdy dev.pin.hint dev.px0 dev.py0 dev.pdx dev.pdy dev.pat.hint toast.recEmpty; do
+  n=$(gc "'$k'" webroot/i18n.js)
+  [ "${n:-0}" = "4" ] && ok "i18n 四语都有 $k" || fail "i18n 的 $k 出现 $n 次 (应为 4 种语言各一次)"
+done
+# 录到 0 条动作时不能只说「已停止」—— 用户会以为录成功了
+if grep -q "indexOf('empty')" webroot/app.js && grep -q "toast.recEmpty" webroot/app.js; then
+  ok "停止时 0 条动作会补一句怎么补救"
+else
+  fail "录到 0 条动作时没有额外提示, 用户以为录成功了"
 fi
 
 
