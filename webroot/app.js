@@ -1,7 +1,7 @@
 // icbc_daily_water WebUI 逻辑 v0.12.5 (多任务 Profiles + 操作录制 + 多语言 + 后台清理 + 多设备档案 + 文档缓存自愈)
 // 走 KernelSU 注入的 ksu 接口执行 root 命令
 import { exec, toast, moduleInfo } from './kernelsu.js';
-import { t, setLang, getLang, langLabel, applyI18n, LANGS } from './i18n.js';
+import { t, setLang, getLang, applyI18n, LANGS } from './i18n.js';
 
 const W = '/data/adb/modules/icbc_daily_water/webctl.sh';
 const $ = (id) => document.getElementById(id);
@@ -132,7 +132,8 @@ function isErr(r) {
 
 // ---------- 状态加载 ----------
 function chkRow(name, state, good) {
-  return '<div class="ck"><span>' + esc(name) + '</span><span class="' + (good ? 'ok' : 'bad') + '">' + esc(state) + '</span></div>';
+  // good: true=正常(绿) / false=挡住了自动运行(橙) / null=纯信息(灰, 比如「不在触发窗口」平时本来就该是否)
+  return '<div class="ck"><span>' + esc(name) + '</span><span class="' + (good === null ? 'mut' : (good ? 'ok' : 'bad')) + '">' + esc(state) + '</span></div>';
 }
 
 function esc(s) {
@@ -173,7 +174,7 @@ function dayBtnsHtml(str, inherit) {
     const cls = ((on.indexOf(d) !== -1 ? 'on' : '') + (inherit ? ' inherit' : '')).trim();
     const lab = dayLabel(parseInt(d, 10));
     return '<button type="button" data-act="pDay" data-day="' + d + '" class="' + cls +
-           '" title="' + esc(lab) + '">' + esc(lab) + '</button>';
+           '" aria-pressed="' + (on.indexOf(d) !== -1 ? 'true' : 'false') + '" title="' + esc(lab) + '">' + esc(lab) + '</button>';
   }).join('');
 }
 
@@ -207,6 +208,11 @@ async function loadStatus() {
   $('sleep').checked = cfg.SLEEP_AFTER === '1';
   // 老配置里没有 CLEANUP_AFTER 时保持模块默认值(开), 与 service.sh 的回落一致。
   $('cleanup').checked = (cfg.CLEANUP_AFTER === undefined ? '1' : cfg.CLEANUP_AFTER) === '1';
+  // 验证码: 缺键 = 开 (与 captcha.sh 一致); 没有 Termux Python 时开关无效, 提示原因
+  $('captcha').checked = cfg.CAPTCHA_SOLVE !== '0';
+  // 两个键写成字面量调用 (回归守卫只认字面量, 三元套在 t() 里会让 captchaNoPy 变成孤儿键)
+  $('captchaHint').textContent = cfg.captcha_py === 'no' ? t('lbl.captchaNoPy') : t('lbl.captchaHint');
+  $('captchaHint').classList.toggle('warn', cfg.captcha_py === 'no');
   $('mode').value = (cfg.UNLOCK_MODE === 'swipe' || cfg.UNLOCK_MODE === 'pattern') ? cfg.UNLOCK_MODE : 'pin';
   $('patBox').hidden = $('mode').value !== 'pattern';
   $('pin').placeholder = (cfg.PIN && cfg.PIN.length > 0) ? t('ph.pinSet') : t('ph.pinUnset');
@@ -217,7 +223,7 @@ async function loadStatus() {
   }
   // 全局执行日 (任务自己的 P_DAYS 为空时跟随它)
   gloDays = (cfg.SCHED_DAYS && /^[0-7]+$/.test(cfg.SCHED_DAYS)) ? cfg.SCHED_DAYS : '1234567';
-  renderDayBtns($('daysGlobalBtns'), gloDays, false);
+  renderDayBtns($('daysGlobalBtns'), gloDays, true);   // 全局行也用安静的浅色样式; 实心留给任务自己定的执行日
   // 内置工行任务是否还在: 被删掉才给「恢复」入口
   $('icbcRow').hidden = cfg.icbc_present !== 'no';
   // 触发检查
@@ -234,17 +240,26 @@ async function loadStatus() {
   const rows = [
     chkRow(t('chk.svc'), svcRun ? t('st.svcRun') : t('st.svcStop'), svcRun),
     chkRow(t('chk.enable'), enabled ? t('st.on') : t('st.off'), enabled),
-    chkRow(t('chk.window'), winOk ? t('chk.windowYes', { now: cfg.now || '' }) : t('chk.windowNo'), winOk),
+    chkRow(t('chk.window'), winOk ? t('chk.windowYes', { now: cfg.now || '' }) : t('chk.windowNo'), winOk ? true : null),
     chkRow(t('chk.day'), dayOk ? t('chk.dayYes', { day: dayLabel(parseInt(cfg.day || '1', 10)) }) : t('chk.dayNo'), dayOk),
     chkRow(t('chk.done'), doneOk ? t('chk.doneYes') : t('chk.doneNo'), !doneOk),
     chkRow(t('chk.screen'), screenOff ? t('chk.screenOff') : t('chk.screenOn'), true),
     chkRow(t('chk.fail'), failOk ? t('chk.failN', { n: failN }) : t('chk.failBlocked', { n: failN }), failOk)
   ];
   $('chk').innerHTML = rows.join('');
+  // 摘要只算真正会挡住自动运行的项 (服务/总开关/执行日/连续失败); 触发窗口和「今天已浇」
+  // 是信息项, 平时本来就会是「否」, 算进去摘要就永远在报警。
+  const issues = (svcRun ? 0 : 1) + (enabled ? 0 : 1) + (dayOk ? 0 : 1) + (failOk ? 0 : 1);
+  $('chkSum').textContent = issues ? t('chk.issues', { n: issues }) : t('chk.allOk');
+  $('chkSum').className = issues ? 'bad' : '';
+  $('svcDot').className = 'dot ' + (svcRun ? 'ok' : 'bad');
+  $('svcTxt').textContent = t('chk.svc') + ' ' + (svcRun ? t('st.svcRun') : t('st.svcStop'));
   loadProfiles();
 }
 
 // ---------- Profiles ----------
+const openProf = new Set();   // 展开了「设置」面板的任务 slug, 重绘时保持
+let profHtml = '';            // 上次渲染的 HTML, 用来跳过无变化的重绘
 async function loadProfiles() {
   const out = await run('profiles');
   // 录制状态恢复: 页面刷新/加载时, 若后台正在录制, 把对应任务卡的按钮恢复为「停止录制」并继续轮询
@@ -257,7 +272,8 @@ async function loadProfiles() {
   }
   const box = $('profs');
   if (!out || out.indexOf('EXEC_ERR') === 0) {
-    box.innerHTML = '<p class="midi">' + esc(t('prof.loadFail', { err: out })) + '</p>';
+    profHtml = '';
+    box.innerHTML = '<p class="empty">' + esc(t('prof.loadFail', { err: out })) + '</p>';
     return;
   }
   const list = [];
@@ -270,11 +286,11 @@ async function loadProfiles() {
     while ((tt = tkre.exec(m[2])) !== null) p[tt[1]] = tt[2];
     list.push(p);
   }
-  if (!list.length) { box.innerHTML = '<p class="midi">' + esc(t('prof.empty')) + '</p>'; return; }
+  if (!list.length) { profHtml = ''; box.innerHTML = '<p class="empty">' + esc(t('prof.empty')) + '</p>'; return; }
   // gloSched/gloEn 用模块级的(loadStatus 已灌好), 不再从 DOM 读 —— 那两个元素
   // 随 card.time 卡片一起删掉了, 这里再读就是顶层 TypeError 白屏。
   const gloClean = $('cleanup').checked;
-  box.innerHTML = list.map((p) => {
+  const html = list.map((p) => {
     // 继承: p_sched/p_enable/pcleanup 为空时用全局
     const sched = p.psched || gloSched;
     const en = p.penable === '1' ? true : (p.penable === '' ? gloEn : false);
@@ -285,71 +301,79 @@ async function loadProfiles() {
     const isAll = p.pscope === 'all';
     const homeOn = p.phome !== '0';
     const ownDays = !!(p.pdays && p.pdays !== '');
-    // 该任务的实际清理开关: P_CLEANUP 覆盖全局, 都没有时回落到全局(与服务端一致)。
-    let cleanOn;
-    if (p.pcleanup === '1') cleanOn = true;
-    else if (p.pcleanup === '0') cleanOn = false;
-    else cleanOn = gloClean;
-    const doneBadge = p.pdone === 'yes'
-      ? '<span class="pill ok">' + esc(t('prof.doneToday')) + '</span>'
-      : '<span class="pill warn">' + esc(t('prof.notToday')) + '</span>';
-    // 清理徽标: 实际会不会退出 app 由 P_CLEANUP 覆盖全局决定, 裸录任务永远不算。
-    const cleanBadge = hasPkg || isScript
-      ? '<span class="pill' + (cleanOn ? ' ok' : ' warn') + '">🧹 ' + esc(cleanOn ? t('opt.cleanup.on') : t('opt.cleanup.off')) + '</span>'
-      : '';
-    return '<div class="prof" data-slug="' + esc(p.slug) + '">' +
-      // 任务名独占一整行。名字和徽标挤在同一个 flex 行里时, 窄屏(17 Pro 约
-      // 348dp)上徽标会把名字挤到只剩几像素, 而 min-width:0 又允许它继续缩 ——
-      // 中文可以在任意两个字之间断行, 于是变成一个字一行竖着排; 拉丁文不肯断词
-      // 所以看不出来。独占一行 + nowrap 从根上避免这件事。
-      '<span class="pn" title="' + esc(p.pname || p.slug) + '">' + esc(p.pname || p.slug) + '</span>' +
-      '<div class="pbadges">' +
-        '<span class="pill">' + esc(isScript ? t('prof.script') : t('prof.record')) + '</span>' +
-        (isAll ? '<span class="pill warn">' + esc(t('prof.allScope')) + '</span>' : '') +
-        doneBadge +
-        cleanBadge +
-        (p.ptry && p.ptry !== '0' ? '<span class="pill">' + esc(t('prof.failN', { n: p.ptry })) + '</span>' : '') +
-      '</div>' +
-      '<div class="pm">' +
-        '<span>' + esc(t('lbl.pkg')) + '</span>' +
-        '<input class="pkgbox" data-act="pPkg" value="' + esc(p.ppkg || '') + '" placeholder="' + esc(isAll ? t('prof.allScope') : t('ph.pkgUnset')) + '"' + (isScript || isAll ? ' disabled' : '') + '>' +
-        '<button class="small" data-act="pPkgSave"' + (isScript || isAll ? ' disabled' : '') + '>' + esc(t('btn.savePkg')) + '</button>' +
-        (p.pacts && p.pacts !== '0' ? ' · ' + esc(t('prof.acts', { n: p.pacts })) : '') +
-        (isScript || hasPkg || isAll ? '' : ' · ' + esc(t('prof.bareNote'))) +
-      '</div>' +
-      '<div class="prow2">' +
-        '<label><input type="checkbox" data-act="pEnable" ' + (en ? 'checked' : '') + '> ' + esc(t('lbl.enable')) + '</label>' +
-        '<input type="time" data-act="pTime" value="' + sched.slice(0, 2) + ':' + sched.slice(2) + '">' +
-        '<button class="small" data-act="pTimeSave">' + esc(t('btn.savePkg')) + '</button>' +
-        '<select class="cleanup" data-act="pCleanup" title="' + esc(t('lbl.cleanupAfter')) + '">' +
-          '<option value=""' + (p.pcleanup ? '' : ' selected') + '>' + esc(t('opt.cleanup.inherit')) + '</option>' +
-          '<option value="1"' + (p.pcleanup === '1' ? ' selected' : '') + '>' + esc(t('opt.cleanup.on')) + '</option>' +
-          '<option value="0"' + (p.pcleanup === '0' ? ' selected' : '') + '>' + esc(t('opt.cleanup.off')) + '</option>' +
-        '</select>' +
-        (isScript ? '' :
-        '<select class="cleanup" data-act="pScale" title="' + esc(t('scale.title')) + '">' +
+    const open = openProf.has(p.slug);
+    const name = p.pname || p.slug;
+    // 一行摘要: 时间 · 类型 · 动作数 · 今日状态。原来的五枚胶囊徽标合并成这一行文字,
+    // 清理开关的实际值在展开的「设置」里看。
+    const parts = [esc(sched.slice(0, 2) + ':' + sched.slice(2)), esc(isScript ? t('prof.script') : t('prof.record'))];
+    if (isAll) parts.push(esc(t('prof.allScope')));
+    if (p.pacts && p.pacts !== '0') parts.push(esc(t('prof.acts', { n: p.pacts })));
+    parts.push(p.pdone === 'yes' ? '<span class="ok">' + esc(t('prof.doneToday')) + '</span>' : esc(t('prof.notToday')));
+    if (p.ptry && p.ptry !== '0') parts.push('<span class="warn">' + esc(t('prof.failN', { n: p.ptry })) + '</span>');
+    // 设置面板里的一行: 左标题(可带副标题)、右控件
+    const frow = (label, ctl, sub) =>
+      '<div class="item"><div class="grow"><div class="t">' + esc(label) + '</div>' +
+      (sub ? '<div class="s">' + esc(sub) + '</div>' : '') + '</div>' + ctl + '</div>';
+    const cleanupSel =
+      '<select data-act="pCleanup" aria-label="' + esc(t('lbl.cleanupAfter')) + '">' +
+        '<option value=""' + (p.pcleanup ? '' : ' selected') + '>' + esc(t('opt.cleanup.inherit')) + '</option>' +
+        '<option value="1"' + (p.pcleanup === '1' ? ' selected' : '') + '>' + esc(t('opt.cleanup.on')) + '</option>' +
+        '<option value="0"' + (p.pcleanup === '0' ? ' selected' : '') + '>' + esc(t('opt.cleanup.off')) + '</option>' +
+      '</select>';
+    const body = [
+      frow(t('lbl.time'),
+        '<span class="ctl"><input type="time" data-act="pTime" aria-label="' + esc(t('lbl.time')) + '" value="' + sched.slice(0, 2) + ':' + sched.slice(2) + '">' +
+        '<button class="btn" data-act="pTimeSave">' + esc(t('btn.save')) + '</button></span>'),
+      '<div class="item stack"><div class="t">' + esc(t('lbl.days')) + '</div>' +
+        '<div class="seg" data-daybox role="group" aria-label="' + esc(t('lbl.days')) + '">' + dayBtnsHtml(ownDays ? p.pdays : gloDays, !ownDays) + '</div>' +
+        (ownDays ? '<button class="btn text" data-act="pDaysInherit" style="align-self:flex-start">' + esc(t('opt.days.inherit')) + '</button>' : '') +
+      '</div>',
+      frow(t('lbl.cleanupAfter'), cleanupSel)
+    ];
+    if (!isScript) {
+      // 包名只在「指定包名」的录制任务里有意义; 脚本型/全场录取没有这一行
+      if (!isAll) {
+        body.push('<div class="item stack"><div class="t">' + esc(t('lbl.pkg')) + '</div>' +
+          '<div class="ctl fill"><input type="text" class="pkgbox" data-act="pPkg" aria-label="' + esc(t('lbl.pkg')) + '" value="' + esc(p.ppkg || '') + '" placeholder="' + esc(t('ph.pkgUnset')) + '" autocomplete="off" autocapitalize="off">' +
+          '<button class="btn" data-act="pPkgSave">' + esc(t('btn.save')) + '</button></div>' +
+          (hasPkg ? '' : '<div class="s">' + esc(t('prof.bareNote')) + '</div>') + '</div>');
+      }
+      body.push(frow(t('lbl.recMode'),
+        '<select data-act="pScope" aria-label="' + esc(t('lbl.recMode')) + '">' +
+          '<option value="pkg"' + (isAll ? '' : ' selected') + '>' + esc(t('opt.rec.pkg')) + '</option>' +
+          '<option value="all"' + (isAll ? ' selected' : '') + '>' + esc(t('opt.rec.all')) + '</option>' +
+        '</select>'));
+      body.push('<label class="item"><span class="grow t">' + esc(t('lbl.pHome')) + '</span>' +
+        '<input type="checkbox" class="switch" data-act="pHome"' + (homeOn ? ' checked' : '') + '></label>');
+      body.push(frow(t('scale.title'),
+        '<select data-act="pScale" aria-label="' + esc(t('scale.title')) + '">' +
           '<option value="0"' + (p.pscale === '1' ? '' : ' selected') + '>' + esc(t('opt.scale.off')) + '</option>' +
           '<option value="1"' + (p.pscale === '1' ? ' selected' : '') + '>' + esc(t('opt.scale.on')) + '</option>' +
-        '</select>') +
-        '<button class="small primary" data-act="pRun">' + esc(isScript ? t('btn.runWater') : t('btn.runTask')) + '</button>' +
-        (isScript ? '' : '<button class="small' + (isRec ? ' rec-on' : '') + '" data-act="pRec" data-state="' + (isRec ? 'recording' : 'idle') + '">' + esc(isRec ? t('btn.recStop') : t('btn.recStart')) + '</button>') +
-        '<button class="small danger" data-act="pDel">' + esc(t('btn.del')) + '</button>' +
+        '</select>', t('scale.hint')));
+    }
+    body.push('<div class="item"><button class="btn danger block" data-act="pDel">' + esc(t('btn.del')) + '</button></div>');
+    // 任务名独占一行 + nowrap: 窄屏(17 Pro 约 348dp)上名字和别的东西挤在一个 flex 行里时,
+    // 中文可以在任意两字间断行, 会被挤成竖排; 放不下就省略号, 全名在 title 里。
+    return '<div class="prof line" data-slug="' + esc(p.slug) + '">' +
+      '<div class="prof-head">' +
+        // 整块名字+摘要就是「展开设置」的按钮 (像系统设置列表行); 开关在它右边, 单独一个点击目标
+        '<button type="button" class="prof-main" data-act="pOpen" title="' + esc(t('btn.more')) + '" aria-expanded="' + (open ? 'true' : 'false') + '">' +
+          '<span class="grow"><span class="pn" title="' + esc(name) + '">' + esc(name) + '</span>' +
+          '<span class="s">' + parts.join(' · ') + '</span></span>' +
+          '<span class="chev" aria-hidden="true"></span></button>' +
+        '<label class="tog"><input type="checkbox" class="switch" data-act="pEnable" aria-label="' + esc(t('lbl.enable')) + '" ' + (en ? 'checked' : '') + '></label>' +
       '</div>' +
-      // 第二行: 录制方式 + 回放起点 (录制型) + 每周执行日 (所有任务)
-      '<div class="prow2">' +
-        (isScript ? '' :
-          '<select class="cleanup" data-act="pScope" title="' + esc(t('lbl.recMode')) + '">' +
-            '<option value="pkg"' + (isAll ? '' : ' selected') + '>' + esc(t('opt.rec.pkg')) + '</option>' +
-            '<option value="all"' + (isAll ? ' selected' : '') + '>' + esc(t('opt.rec.all')) + '</option>' +
-          '</select>' +
-          '<label title="' + esc(t('lbl.pHome')) + '"><input type="checkbox" data-act="pHome"' + (homeOn ? ' checked' : '') + '> ' + esc(t('lbl.pHome')) + '</label>'
-        ) +
-        '<span class="dl" title="' + esc(t('lbl.days')) + '">' + esc(t('lbl.days')) + '</span>' +
-        '<span class="daybtns" data-daybox>' + dayBtnsHtml(ownDays ? p.pdays : gloDays, !ownDays) + '</span>' +
-        (ownDays ? '<button class="small ghost" data-act="pDaysInherit">' + esc(t('opt.days.inherit')) + '</button>' : '') +
+      '<div class="prof-acts">' +
+        '<button class="btn run" data-act="pRun">' + esc(isScript ? t('btn.runWater') : t('btn.runTask')) + '</button>' +
+        (isScript ? '' : '<button class="btn' + (isRec ? ' rec' : '') + '" data-act="pRec" data-state="' + (isRec ? 'recording' : 'idle') + '">' + esc(isRec ? t('btn.recStop') : t('btn.recStart')) + '</button>') +
       '</div>' +
+      '<div class="prof-body"' + (open ? '' : ' hidden') + '>' + body.join('') + '</div>' +
     '</div>';
   }).join('');
+  // 内容没变就不重绘: 状态每 15 秒轮询一次, 重绘会把正在输入还没保存的时间/包名冲掉。
+  if (html === profHtml && box.firstChild) return;
+  profHtml = html;
+  box.innerHTML = html;
 }
 
 // ---------- 录制状态轮询 ----------
@@ -566,6 +590,15 @@ async function onProfAct(e, evType) {
   if (isFormField ? evType !== 'change' : evType !== 'click') return;
   const slug = prof.dataset.slug;
   const act = btn.dataset.act;
+  // 展开/收起「设置」面板: 纯界面状态, 不碰后端, 也不受 busy 限制
+  if (act === 'pOpen') {
+    const pb = prof.querySelector('.prof-body');
+    const willOpen = pb.hidden;
+    pb.hidden = !willOpen;
+    btn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    if (willOpen) openProf.add(slug); else openProf.delete(slug);
+    return;
+  }
   // 只处理认识的动作; 像 pTime 这种纯输入框没有对应保存按钮, 直接忽略。
   if (['pEnable', 'pCleanup', 'pScale', 'pTimeSave', 'pRun', 'pPkgSave', 'pDel', 'pRec',
        'pScope', 'pHome', 'pDay', 'pDaysInherit'].indexOf(act) === -1) return;
@@ -654,7 +687,7 @@ async function onProfAct(e, evType) {
         toastMsg(t('toast.recStart'));
         btn.textContent = t('btn.recStop');
         btn.dataset.state = 'recording';
-        btn.classList.add('rec-on');
+        btn.classList.add('rec');
         if (recPoll) clearInterval(recPoll);
         recPoll = setInterval(pollRec, 3000);
       }
@@ -682,10 +715,16 @@ function loadFoot() {
   if (ver && !/^v/i.test(ver)) ver = 'v' + ver;               // 有的宿主把 v 前缀去了
   const p = $('ver');
   if (ver) p.textContent = ver;
-  $('footver').textContent = t('foot.ver', { ver: ver || p.textContent, lang: langLabel(getLang()) });
 }
 
 // ---------- 语言 ----------
+// 标题里的 " · " 换行时会把圆点甩到下一行开头; 在圆点前放不换行空格, 让它跟着前一个词走。
+// 只改运行时文本, 静态 HTML 和 i18n 里的 app.title 原文不动 (build_zip.sh 按原文校验)。
+function tidyTitle() {
+  const h = document.querySelector('h1');
+  if (h) h.textContent = h.textContent.replace(' \u00b7 ', '\u00a0\u00b7 ');
+}
+
 function buildLangSelect() {
   const sel = $('lang');
   sel.innerHTML = LANGS.map((l) =>
@@ -703,6 +742,7 @@ function buildLangSelect() {
 // 切换语言后整页重绘: 静态文案由 applyI18n 处理, 动态文案(状态/任务卡/日志)重跑一次。
 function onLangChange() {
   setLang($('lang').value);
+  tidyTitle();
   loadFoot();
   loadStatus();
   loadLog();
@@ -730,6 +770,7 @@ $('lang').addEventListener('change', onLangChange);
 $('watch').addEventListener('change', (e) => toggle('setwatch', e.target.checked ? '1' : '0', t('toast.savedOn'), t('toast.savedOff')));
 $('sleep').addEventListener('change', (e) => toggle('setsleep', e.target.checked ? '1' : '0', t('toast.savedOn'), t('toast.savedOff')));
 $('cleanup').addEventListener('change', (e) => toggle('setcleanup', e.target.checked ? '1' : '0', t('toast.cleanupSaved'), t('toast.cleanupOff')));
+$('captcha').addEventListener('change', (e) => toggle('setcaptcha', e.target.checked ? '1' : '0', t('toast.captchaOn'), t('toast.captchaOff')));
 $('mode').addEventListener('change', (e) => {
   // 先把图案画布亮出来再等保存回读: 切过去半天没反应的话, 用户会以为下拉是死的
   $('patBox').hidden = e.target.value !== 'pattern';
@@ -787,7 +828,13 @@ $('btnLog').addEventListener('click', loadLog);
 // DEV_APPLY 是总闸, 关着(=默认)时各脚本根本不读 DEV_*, 用的是 17 Pro 实测基线。
 let devDirty = false;
 
-function devSet(id, v) { const e = $(id); if (e) e.value = (v == null ? '' : v); }
+function devSet(id, v) {
+  const e = $(id);
+  if (!e) return;
+  // 复选框要写 .checked: 以前对 devApply 写 .value, 界面永远不反映已保存的「启用覆盖」,
+  // 而保存时又读 .checked —— 一点保存就会把已开启的覆盖悄悄写回关闭。
+  if (e.type === 'checkbox') e.checked = !!v; else e.value = (v == null ? '' : v);
+}
 
 // 从 device get 的 key=value 行里取值。
 // 只有 DEV_LABEL 需要把存储形态(下划线)还原成显示形态(空格)。
@@ -853,9 +900,6 @@ function devRenderBadge(d) {
   }
   b.textContent = txt;
   b.className = cls;
-  // 「稳定 / 测试中」是「这个机型有没有被验证过」的静态标签, 不是运行状态,
-  // 也不参与 devSave() 的任何判定 —— 但它黄色的样子很像卡住, 所以把含义显式写出来。
-  b.title = (applyOn && !isPro) ? t('dev.testing.hint') : t('dev.stable.hint');
 }
 
 function devMarkDirty() {
@@ -972,6 +1016,7 @@ setTimeout(selfHeal, 1500);
 // 初次加载: 先定语言(静态文案立即替换), 再拉状态
 buildLangSelect();
 applyI18n(document);
+tidyTitle();
 // (这里原本还有一句 refreshFoldBtn() —— 「收起全部」按钮已随概览区卡片删除)
 
 // 缺桥时只显示整页提示, 不再往下走: 继续跑的话每 15 秒一次的轮询会全失败,

@@ -3,208 +3,222 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
 <!-- 模块升级后 WebUI 容易被 WebView 命中旧缓存: 显式禁用缓存 + 资源带版本号(见 tools/build_zip.sh) -->
 <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>澎湃自动化—XiaomiAutomation</title>
 <style>
+  /* ============ 设计令牌 ============
+     一个强调色(蓝); 绿/橙/红只给状态文字用。间距走 4/8 倍数 (4 8 12 16 24),
+     圆角两档: 分组 16 / 控件 12, 按钮是胶囊。深浅色跟随系统 (prefers-color-scheme)。 */
   :root {
-    --bg: #0d1117; --card: #161b24; --card2: #1c222d; --line: #283040;
-    --fg: #e8ecf3; --mut: #8b95a9; --acc: #3b82f6; --ok: #22c55e; --warn: #f59e0b;
-    --r: 16px; --gap: 10px;
+    color-scheme: light dark;
+    --bg: #f2f2f4; --surface: #ffffff; --fill: #efeff2; --line: rgba(0, 0, 0, .09);
+    --fg: #111113; --mut: #66666e;
+    --acc: #1666d0; --acc-fill: #1a73e8; --on-acc: #ffffff; --acc-tint: rgba(26, 115, 232, .13); --acc-soft: #dfe9fb;
+    --ok: #1a7f45; --warn: #9a5b00; --bad: #c5221f;
+    --switch-off: #c9c9ce;
+    --r-group: 16px; --r-field: 12px;
+    --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s6: 24px;
+    --tap: 44px;
+    --font: "MiSans", system-ui, -apple-system, "Roboto", "Noto Sans SC", "Noto Sans CJK SC", sans-serif;
   }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0a0a0b; --surface: #1c1c1e; --fill: #2b2b2e; --line: rgba(255, 255, 255, .1);
+      --fg: #f4f4f5; --mut: #9a9aa2;
+      --acc: #6ab0ff; --acc-tint: rgba(106, 176, 255, .18); --acc-soft: #233853;
+      --ok: #5fd38b; --warn: #ffb54d; --bad: #ff7a70;
+      --switch-off: #48484d;
+    }
+  }
+
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  [hidden] { display: none !important; }
   body {
-    background: var(--bg); color: var(--fg);
-    font: 15px/1.55 -apple-system, "PingFang SC", "Noto Sans CJK SC", "Segoe UI", Roboto, sans-serif;
-    padding: 14px 12px 36px;
+    background: var(--bg); color: var(--fg); font: 16px/1.4 var(--font);
+    padding: var(--s4) var(--s4) calc(var(--s6) + env(safe-area-inset-bottom));
+    -webkit-text-size-adjust: 100%;
   }
+  .wrap { max-width: 560px; margin: 0 auto; }
+  :focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
 
-  /* ---------- 页头 ---------- */
-  header { display: flex; align-items: center; gap: 8px; max-width: 560px; margin: 0 auto 12px; }
-  h1 { font-size: 17px; font-weight: 700; flex: 1; min-width: 0;
-       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #lang { flex: none; width: auto; padding: 7px 8px; font-size: 12px; border-radius: 9px; }
+  /* ============ 页头 ============ */
+  h1 { font-size: 24px; line-height: 1.25; font-weight: 700; letter-spacing: -.01em; padding: var(--s2) var(--s1) 0; text-wrap: balance; }
+  .top-sub { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); margin: var(--s1) 0 var(--s4); }
+  .stat { display: flex; align-items: center; gap: var(--s2); font-size: 13px; color: var(--mut); padding-left: var(--s1); min-width: 0; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mut); flex: none; }
+  .dot.ok { background: var(--ok); }
+  .dot.bad { background: var(--bad); }
 
-  /* (概览区那张卡 —— .hero / .chips / .chip —— 已整体删除: 它只有「今日已浇」
-     这种默认内置工行的遗留状态 + 刷新/重启服务三个按钮, 状态明细本来就在
-     「触发检查」卡里。顶部现在只剩 header 里的版本角标 #ver。) */
-  #ver { font-size: 12px; padding: 4px 10px; border-radius: 999px;
-         background: #0f141c; border: 1px solid var(--line); color: var(--mut); }
-
-  /* ---------- 折叠分组 ---------- */
-  main { display: flex; flex-direction: column; gap: var(--gap); max-width: 560px; margin: 0 auto; }
-  details.sec {
-    background: var(--card); border: 1px solid var(--line);
-    border-radius: var(--r); overflow: hidden;
+  /* ============ 分组 / 行 ============ */
+  .sect { margin-bottom: var(--s6); }
+  .label { font-size: 13px; font-weight: 500; color: var(--mut); padding: 0 var(--s4) var(--s2); }
+  .group { background: var(--surface); border-radius: var(--r-group); overflow: hidden; }
+  /* 行间分隔线: 左右各缩进 16px, 画在行的上沿 (第一行不画) */
+  .line, .group > .item:not(:first-child), .fbody > .item:not(:first-child) {
+    background-image: linear-gradient(var(--line), var(--line));
+    background-repeat: no-repeat; background-size: calc(100% - 2 * var(--s4)) 1px; background-position: var(--s4) 0;
   }
-  details.sec > summary {
-    list-style: none; cursor: pointer; user-select: none;
-    display: flex; align-items: center; gap: 9px;
-    padding: 13px 14px; font-size: 14px; font-weight: 600;
-  }
-  details.sec > summary::-webkit-details-marker { display: none; }
-  /* 自绘箭头: 展开时旋转 90°。用 CSS 而不是文字符号, 免得多语言里出现裸箭头字符。 */
-  details.sec > summary::before {
-    content: ''; flex: none; width: 7px; height: 7px;
-    border-right: 2px solid var(--mut); border-bottom: 2px solid var(--mut);
-    transform: rotate(-45deg); transition: transform .16s ease; margin-left: 2px;
-  }
-  details.sec[open] > summary::before { transform: rotate(45deg); }
-  details.sec[open] > summary { border-bottom: 1px solid var(--line); }
-  .sbody { padding: 12px 14px 14px; }
-  .sbody > *:first-child { margin-top: 0; }
-  .badge-dot { margin-left: auto; font-size: 11px; color: var(--mut); font-weight: 400; }
+  /* 行内放不下就把控件折到下一行, 而不是把标题挤成一字宽 (俄语/法语标题长, 中文可在任意两字间断行) */
+  .item { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); min-height: 56px; padding: var(--s3) var(--s4); }
+  .item > .grow { flex: 1 1 9rem; }
+  .item > .ctl, .item > select, .item > input[type=time] { margin-left: auto; max-width: 100%; }
+  summary.item { flex-wrap: nowrap; }
+  .item.stack { flex-direction: column; align-items: stretch; gap: var(--s2); }
+  .grow { flex: 1; min-width: 0; }
+  .t { font-size: 16px; line-height: 1.35; overflow-wrap: anywhere; }
+  .s { font-size: 13px; line-height: 1.4; color: var(--mut); margin-top: 2px; overflow-wrap: anywhere; }
+  .s .ok { color: var(--ok); }
+  .s .warn, .s.warn { color: var(--warn); }
+  .s .bad { color: var(--bad); }
+  .ctl { display: flex; align-items: center; gap: var(--s2); }
+  .ctl.fill { width: 100%; }
+  .ctl.fill > input, .ctl.fill > select { flex: 1; min-width: 0; }
+  .empty { padding: var(--s4); font-size: 14px; color: var(--mut); }
 
-  /* ---------- 通用控件 ---------- */
-  .hint { font-size: 12px; line-height: 1.6; color: var(--mut); }
+  /* 折叠行: 点标题行展开 */
+  details.fold > summary { list-style: none; cursor: pointer; user-select: none; -webkit-user-select: none; }
+  details.fold > summary::-webkit-details-marker { display: none; }
+  /* 自绘箭头: 收起朝右, 展开朝下。用 CSS 画而不是文字符号, 免得各语言里出现裸箭头字符。 */
+  .chev { flex: none; width: 8px; height: 8px; border-top: 2px solid var(--mut); border-right: 2px solid var(--mut); transform: rotate(45deg); margin: 0 var(--s1); transition: transform .16s ease; }
+  details.fold[open] > summary .chev { transform: rotate(135deg); }
+  details.fold > summary .val { font-size: 14px; color: var(--mut); display: flex; align-items: center; gap: var(--s2); }
+  .fbody { border-top: 1px solid var(--line); }
 
-  /* ---------- 缺少 root 桥时的整页提示 ----------
-     正常情况下隐藏。只有当页面不在 root 管理器的 WebView 里打开(管理器没注入
-     ksu 全局对象)才显示, 见 app.js 的 bridgeOk()。 */
-  #nobridge {
-    max-width: 560px; margin: 0 auto 14px; padding: 14px 14px 16px;
-    background: var(--card); border: 1px solid var(--warn); border-radius: var(--r);
-  }
-  #nobridge h2 { font-size: 16px; font-weight: 700; color: var(--warn); margin-bottom: 8px; }
-  #nobridge p { font-size: 13px; line-height: 1.7; color: var(--fg); }
-  #nobridge p + p { margin-top: 8px; color: var(--mut); }
-  .row { display: flex; align-items: center; gap: 8px; margin-top: var(--gap); }
-  .rowwrap { flex-wrap: wrap; }
-  .flex1 { flex: 1; min-width: 0; }
-  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); margin-top: var(--gap); }
-  .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: var(--gap); }
-  .fld { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--mut); }
-  .fld input, .fld select { width: 100%; }
-  .fldcap { font-size: 11px; color: var(--mut); margin-top: var(--gap); }
-
+  /* ============ 表单控件 ============ */
   input[type=time], input[type=password], input[type=number], input[type=text], select {
-    background: #0f141c; color: var(--fg); border: 1px solid var(--line);
-    border-radius: 10px; padding: 10px 12px; font-size: 14px; min-width: 0;
-    font-family: inherit;
+    font: inherit; font-size: 16px; color: var(--fg); background-color: var(--fill);
+    border: 1px solid transparent; border-radius: var(--r-field);
+    height: var(--tap); padding: 0 var(--s3); min-width: 0;
   }
-  select { flex: 1; }
-  input:focus, select:focus { outline: none; border-color: var(--acc); }
+  input::placeholder { color: var(--mut); opacity: .8; }
+  input:focus-visible, select:focus-visible { outline: none; border-color: var(--acc); box-shadow: 0 0 0 1px var(--acc); }
+  input:disabled, select:disabled { opacity: .5; }
+  select {
+    -webkit-appearance: none; appearance: none; padding-right: 32px; max-width: 100%;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1.5 1.5 6 6l4.500-4.500' fill='none' stroke='%238e8e96' stroke-width='1.800' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 12px center;
+  }
+  input[type=time] { width: 128px; flex: none; }
+  #lang { width: auto; height: var(--tap); font-size: 14px; flex: none; background-color: transparent; padding-right: 28px; background-position: right 8px center; }
 
-  button {
-    border: 1px solid var(--line); background: #0f141c; color: var(--fg);
-    border-radius: 10px; padding: 10px 14px; font-size: 14px; font-family: inherit;
-    cursor: pointer; white-space: nowrap;
+  .btn {
+    font: inherit; font-size: 15px; font-weight: 500; color: var(--acc); background: var(--fill);
+    border: 0; border-radius: 999px; min-height: var(--tap); padding: 0 var(--s4);
+    cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; justify-content: center; gap: var(--s2);
   }
-  button.primary { background: var(--acc); border-color: var(--acc); color: #fff; font-weight: 600; }
-  button.ghost { color: var(--mut); background: transparent; }
-  button.danger { color: #f87171; }
-  button.small { padding: 7px 11px; font-size: 12px; }
-  button:active { opacity: .75; }
+  .btn:active { opacity: .7; }
+  .btn:disabled { opacity: .4; cursor: default; }
+  .btn.primary { background: var(--acc-fill); color: var(--on-acc); }
+  .btn.run { background: var(--acc-tint); color: var(--acc); font-weight: 600; }
+  .btn.text { background: transparent; padding: 0 var(--s2); }
+  .btn.danger { color: var(--bad); }
+  .btn.danger.block { background: transparent; }
+  .btn.block { width: 100%; }
+  .btn.rec { color: var(--bad); }
 
-  /* 开关行: 文字在左, 勾选框在右, 整行可点。
-     wrap + min-width:0 是防竖排的通用保险: 文案再长也是整字换行到下一行,
-     而不会被压成一个字宽 —— 中文可以在任意两字间断行, 宽度被压到 1 个字时
-     就会变成竖着排。拉丁文不肯断词所以看不出来, 但那只是没暴露而已。 */
-  .sw {
-    display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    flex-wrap: wrap; padding: 11px 2px; border-top: 1px solid var(--line); cursor: pointer;
+  /* 开关: 51×31 的 iOS/HyperOS 式开关, 外面套 label 撑到 44px 触控高度 */
+  .tog { display: inline-flex; align-items: center; min-height: var(--tap); flex: none; cursor: pointer; }
+  .switch {
+    -webkit-appearance: none; appearance: none; flex: none; position: relative; cursor: pointer;
+    width: 51px; height: 31px; border-radius: 16px; background: var(--switch-off); border: 0; transition: background .18s;
   }
-  .sw:first-child { border-top: none; }
-  .sw span { font-size: 14px; min-width: 0; }
-  .sw input[type=checkbox] { flex: none; width: 22px; height: 22px; accent-color: var(--acc); }
+  .switch::after {
+    content: ''; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%;
+    background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .3); transition: transform .18s;
+  }
+  .switch:checked { background: var(--acc-fill); }
+  .switch:checked::after { transform: translateX(20px); }
+  .switch:disabled { opacity: .5; }
+
+  /* 小标签 (设备状态 / 图案状态) */
+  .pill { font-size: 13px; color: var(--mut); white-space: nowrap; }
+  .pill.ok { color: var(--ok); }
+  .pill.warn { color: var(--warn); }
+
+  /* 星期选择: 7 格连体分段, 每格 ≥44px */
+  .seg { display: flex; width: 100%; border-radius: var(--r-field); overflow: hidden; gap: 1px; background: var(--line); }
+  .seg button {
+    flex: 1; min-width: 0; min-height: var(--tap); border: 0; background: var(--fill); color: var(--mut);
+    font: inherit; font-size: 15px; cursor: pointer; padding: 0;
+  }
+  .seg button.on { background: var(--acc-fill); color: var(--on-acc); font-weight: 600; }
+  /* 跟随全局的「亮」: 浅底 + 强调色字, 与「自己定的」实心区分 */
+  .seg button.on.inherit { background: var(--acc-soft); color: var(--acc); }
 
   pre {
-    background: #0f141c; border: 1px solid var(--line); border-radius: 12px; padding: 11px;
-    font: 11px/1.55 ui-monospace, Menlo, Consolas, monospace; color: #9fb0c8;
+    background: var(--fill); border-radius: var(--r-field); padding: var(--s3); margin: var(--s2) var(--s4) var(--s4);
+    font: 12px/1.55 ui-monospace, Menlo, Consolas, monospace; color: var(--mut);
     overflow-x: auto; max-height: 280px; white-space: pre-wrap; word-break: break-all;
-    margin-top: var(--gap);
   }
-  .midi { font-size: 12px; color: var(--mut); }
 
-  /* ---------- 触发检查 ---------- */
-  .ck {
-    display: flex; justify-content: space-between; align-items: center; gap: 10px;
-    flex-wrap: wrap; padding: 9px 2px; border-top: 1px solid var(--line); font-size: 13px;
+  /* ============ 任务行 ============ */
+  .prof { padding: var(--s3) var(--s4); }
+  .prof-head { display: flex; align-items: center; gap: var(--s3); }
+  .prof-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--s2); min-height: var(--tap); text-align: left;
+               font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; border-radius: var(--r-field); }
+  .prof-main .grow { min-width: 0; }
+  .prof-main .pn, .prof-main .s { display: block; }
+  .prof-main[aria-expanded=true] .chev { transform: rotate(135deg); }
+  .pn { font-size: 17px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .prof-acts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin-top: var(--s1); }
+  .prof-body { margin: var(--s3) calc(-1 * var(--s4)) calc(-1 * var(--s3)); border-top: 1px solid var(--line); }
+  .prof-body > .item:not(:first-child) {
+    background-image: linear-gradient(var(--line), var(--line));
+    background-repeat: no-repeat; background-size: calc(100% - 2 * var(--s4)) 1px; background-position: var(--s4) 0;
   }
-  .ck:first-child { border-top: none; }
+  .pkgbox { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px; }
+
+  /* ============ 触发检查 ============ */
+  .ck { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s3); padding: var(--s2) var(--s4); font-size: 14px; }
   .ck > :first-child { min-width: 0; }
-  .ck .ok { color: var(--ok); font-weight: 600; }
-  .ck .bad { color: var(--warn); font-weight: 600; }
+  .ck > :last-child { text-align: right; min-width: 0; }
+  .ck .ok { color: var(--ok); }
+  .ck .bad { color: var(--warn); }
+  .ck .mut { color: var(--mut); }
+  #chk { padding: var(--s1) 0 var(--s2); }
+  #chkSum.bad { color: var(--warn); }
 
-  /* ---------- 任务卡 ---------- */
-  .prof { background: var(--card2); border: 1px solid var(--line); border-radius: 13px; padding: 11px 12px; margin-top: 10px; }
-  .prof:first-child { margin-top: 0; }
-  /* 任务名独占一行: nowrap 保证任何语言都只占一行, 永远不会被挤成竖排。
-     放不下就省略号, 完整名字仍在 title 里, 长按可见。 */
-  .prof .pn {
-    display: block; font-weight: 700; font-size: 14px; line-height: 1.4;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .prof .pbadges { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
-  .prof .pm { font-size: 11px; color: var(--mut); margin-top: 7px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-  .prof .prow2 {
-    display: flex; align-items: center; gap: 7px; margin-top: 9px;
-    padding-top: 9px; border-top: 1px solid var(--line); flex-wrap: wrap;
-  }
-  .prof .prow2 input[type=time] { flex: none; width: 116px; padding: 7px 8px; font-size: 13px; }
-  .prof .prow2 label { font-size: 12px; color: var(--mut); display: flex; align-items: center; gap: 5px; }
-  .prof .prow2 input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--acc); }
-  .pkgbox {
-    flex: 1; min-width: 130px; background: #0f141c; color: var(--fg);
-    border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px;
-    font-size: 12px; font-family: ui-monospace, Menlo, Consolas, monospace;
-  }
-  .pkgbox:disabled { opacity: .45; }
-  .prof .pbtns { display: flex; gap: 6px; margin-top: 9px; flex-wrap: wrap; }
-  .prof select.cleanup { flex: none; width: auto; padding: 7px 8px; font-size: 12px; border-radius: 8px; }
-  .pill {
-    font-size: 11px; padding: 3px 9px; border-radius: 999px;
-    background: #0f141c; border: 1px solid var(--line); color: var(--mut); white-space: nowrap;
-  }
-  .pill.ok { color: var(--ok); border-color: #1e5c38; }
-  .pill.warn { color: var(--warn); border-color: #6b4a12; }
-  .rec-on { color: #f87171; font-weight: 700; }
+  /* ============ 表单网格 ============ */
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); }
+  .fld { display: flex; flex-direction: column; gap: var(--s1); font-size: 13px; color: var(--mut); min-width: 0; }
+  .fld input, .fld select { width: 100%; }
+  .sub { font-size: 13px; font-weight: 500; color: var(--mut); }
 
-  /* ---------- 新版本待重启生效的提示 ----------
-     KSU 刷完会先把 module.prop 改成新版本(所以右上角已经显示新版), 但新包要等重启
-     才从 modules_update 合并到 modules —— 不明说就是"显示新版、跑旧行为"(v0.13.1 踩过)。 */
-  .updwarn {
-    max-width: 560px; margin: 0 auto 12px; padding: 9px 12px;
-    border: 1px solid #6b4a12; border-radius: 10px;
-    background: #1c160c; color: var(--warn); font-size: 12.5px; line-height: 1.5;
-  }
-  .updwarn[hidden] { display: none; }
-
-  /* ---------- 每周执行日 ---------- */
-  .daysrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: var(--gap); }
-  .daysrow .dl { font-size: 11px; color: var(--mut); flex: none; }
-  .daybtns { display: flex; gap: 5px; flex-wrap: wrap; }
-  .daybtns button {
-    padding: 6px 0; width: 34px; font-size: 12px; text-align: center;
-    border-radius: 8px; color: var(--mut);
-  }
-  .daybtns button.on { background: var(--acc); border-color: var(--acc); color: #fff; font-weight: 700; }
-  /* 跟随全局时用虚线边框区分: 「亮着」不等于「本任务自己定的」 */
-  .daybtns button.inherit { border-style: dashed; }
-
-  /* ---------- 图案九宫格 ---------- */
+  /* ============ 图案九宫格 ============ */
   .patpad {
-    position: relative; width: 246px; height: 246px; margin: 10px auto 4px;
+    position: relative; width: 246px; height: 246px; margin: var(--s1) auto;
     display: grid; grid-template-columns: repeat(3, 1fr); place-items: center;
     touch-action: none; user-select: none; -webkit-user-select: none;
-    background: #0f141c; border: 1px solid var(--line); border-radius: 16px;
+    background: var(--fill); border-radius: var(--r-group);
   }
   .patpad .patdot {
-    width: 46px; height: 46px; border-radius: 50%; padding: 0;
-    background: var(--card2); border: 2px solid var(--line); color: var(--mut);
-    font-size: 13px; font-weight: 700; line-height: 1; cursor: pointer;
+    width: 46px; height: 46px; border-radius: 50%; padding: 0; cursor: pointer;
+    background: var(--surface); border: 2px solid var(--line); color: var(--mut);
+    font: inherit; font-size: 14px; font-weight: 600; line-height: 1;
   }
-  .patpad .patdot.on { background: var(--acc); border-color: var(--acc); color: #fff; }
+  .patpad .patdot.on { background: var(--acc-fill); border-color: var(--acc-fill); color: var(--on-acc); }
   .patsvg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-  #patLine { fill: none; stroke: var(--acc); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; opacity: .75; }
+  #patLine { fill: none; stroke: var(--acc-fill); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; opacity: .75; }
   .patseq { font-variant-numeric: tabular-nums; }
 
-  footer { max-width: 560px; margin: 18px auto 0; text-align: center; font-size: 11px; color: var(--mut); }
+  /* ============ 顶部提示条 ============ */
+  .banner { margin-bottom: var(--s4); padding: var(--s3) var(--s4); border-radius: var(--r-field); background: var(--acc-tint); color: var(--fg); font-size: 14px; line-height: 1.45; }
+  .updwarn { background: rgba(255, 181, 77, .16); }
+  /* 缺 root 桥时的整页提示: 正常隐藏, 见 app.js 的 bridgeOk() */
+  #nobridge { margin-bottom: var(--s4); padding: var(--s4); border-radius: var(--r-group); background: var(--surface); border: 1px solid var(--warn); }
+  #nobridge h2 { font-size: 17px; font-weight: 600; color: var(--warn); margin-bottom: var(--s2); }
+  #nobridge p { font-size: 14px; line-height: 1.5; }
+  #nobridge p + p { margin-top: var(--s2); color: var(--mut); }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
+<div class="wrap">
 
 <!-- 缺桥提示: 默认隐藏, 由 app.js 在检测不到 root 管理器注入的 ksu 接口时显示。
      放在最前面, 保证「打不开」时用户第一眼看到的是原因和办法, 而不是满屏 ERR。 -->
@@ -215,94 +229,94 @@
 </div>
 
 <header>
-  <h1 data-i18n="app.title">💧 澎湃自动化 · Xiaomi 17 Pro</h1>
-  <!-- 版本角标: 那个带下划线的占位符由 tools/build_zip.sh 用 module.prop 的 version
-       注入, 源码态保持占位符(带 v 前缀, 与 app.js 里 BUILD_VER.charAt(0) !== 'v' 的
-       源码态判据对齐)。这里以前写死过 v0.12.0, 而 loadFoot() 取不到桥版本时就回落到
-       它 —— 于是「装的是 0.13.2、角标永远显示 12.0, 卸载重装也没用」。写死的值不能留。 -->
-  <span id="ver">__BUILD_VER__</span>
-  <select id="lang" data-i18n-title="lbl.lang" title="语言"></select>
+  <h1 data-i18n="app.title">澎湃自动化 · Xiaomi 17 Pro</h1>
+  <!-- 服务状态 + 版本: 版本占位符由 tools/build_zip.sh 用 module.prop 的 version 注入,
+       源码态保持占位符(带 v 前缀, 与 app.js 里 BUILD_VER.charAt(0) !== 'v' 的源码态判据对齐)。
+       不能写死版本号: loadFoot() 取不到桥版本时会回落到这里, 写死值会让角标说谎。 -->
+  <div class="top-sub">
+    <p class="stat"><span id="svcDot" class="dot"></span><span id="svcTxt">—</span><span aria-hidden="true">·</span><span id="ver">__BUILD_VER__</span></p>
+    <select id="lang" data-i18n-title="lbl.lang" aria-label="Language" title="语言"></select>
+  </div>
 </header>
 
 <!-- 只在"有新包已就位、等重启合并"时出现: 版本角标那时已经是新版本了, 不提示就会
      误以为升级失败/新功能没生效。平时 hidden, 不占位置。 -->
-<div id="upd" class="updwarn" hidden></div>
-
-<!-- 概览区那张卡(状态胶囊「今日已浇 / 服务」+ 刷新 / 重启服务 / 收起全部)已整体删除:
-     「今日已浇」写的是默认内置工行, 而内置工行早已不是核心(可删可恢复, 多任务
-     Profiles 才是唯一入口); 状态明细在「触发检查」卡里一行不缺; 刷新是重复动作
-     (状态每 15 秒自轮询); 「重启服务」只在排查那条老路径时用, 走 `webctl restart` 即可。
-     下面这段注释是它还在时留下的去重记录, 一并保留:
-       这里原本还有一个「💧 立即浇水（测试）」(#btnTrigger), 它调 `trigger` 无参数,
-       而无参数的默认就是内置工行 —— 与下面工行 profile 行的「立即浇水」
-       (`trigger icbc`) 是同一个操作, 文案也几乎一样。按用户要求一起去重:
-       运行类操作统一由每个 profile 行自己发, 顶部不再放一个写死工行的快捷键
-       (有了多个任务之后, 顶部这个按钮只跑工行反而会误导)。 -->
+<div id="upd" class="banner updwarn" hidden></div>
 
 <main>
-  <!-- 任务 Profiles 是「什么时候浇水」的唯一出处。
-       原来这里上面还有一张「⏰ 每日浇水时间」卡, 写的是 sched.conf 的全局 SCHED_TIME,
-       而调度器取的是 profile 自己的 P_SCHED(service.sh: PSCHED=${P_SCHED:-$SCHED_TIME})。
-       内置工行 profile 在创建时就把 SCHED_TIME 快照进了 P_SCHED(customize.sh / service.sh
-       ensure_profiles), 于是那张卡改完对工行根本不生效 —— 是个死控件, 而且让人以为
-       「有两套定时」。删除它, 每个 profile 行自己的时间+开关就是唯一真相。 -->
-  <details class="sec" open>
-    <summary data-i18n="card.prof.title">📁 任务 Profiles</summary>
-    <div class="sbody">
-      <p class="hint" data-i18n="card.prof.hint"></p>
-      <!-- 原 card.time.hint 的内容, 随卡片一起去重搬过来: 说清「到点之后会发生什么」
-           以及为什么默认 07:30, 这两条信息本身是对的, 不该跟着卡片一起被删掉。 -->
-      <p class="hint" data-i18n="prof.schedHint"></p>
-      <!-- 全局执行日: 只作用于「跟随全局」的任务; 单个任务在它自己的卡片里覆盖 -->
-      <div class="daysrow">
-        <span class="dl" data-i18n="lbl.days">每周执行日</span>
-        <div class="daybtns" id="daysGlobalBtns"></div>
+  <!-- 任务: 每个任务自己的时间/开关/执行日才是调度器真正读的值 (P_SCHED / P_ENABLE / P_DAYS),
+       全局只有「执行日」一项, 给没单独设置的任务兜底。 -->
+  <section class="sect">
+    <h2 class="label" data-i18n="card.prof.title">任务</h2>
+    <div class="group">
+      <div class="item stack">
+        <div>
+          <div class="t" data-i18n="lbl.days">执行日</div>
+          <div class="s" data-i18n="days.hint"></div>
+        </div>
+        <div class="seg" id="daysGlobalBtns" role="group" data-i18n-title="lbl.days"></div>
       </div>
-      <p class="fldcap" data-i18n="days.hint"></p>
       <div id="profs"></div>
       <!-- 内置工行任务删掉后才出现: 有它在, 这个按钮点了也是「已存在」 -->
-      <div class="row" id="icbcRow" hidden>
-        <button id="btnAddIcbc" class="ghost flex1" data-i18n="btn.addIcbc">恢复内置工行任务</button>
+      <div class="item" id="icbcRow" hidden>
+        <button id="btnAddIcbc" class="btn block" data-i18n="btn.addIcbc">恢复内置工行任务</button>
       </div>
-      <p class="fldcap" data-i18n="scale.hint"></p>
-      <p class="fldcap" data-i18n="prof.new"></p>
-      <div class="grid2">
-        <input type="text" id="npName" data-i18n-ph="ph.npName" placeholder="新任务名" class="flex1">
-        <input type="text" id="npPkg" data-i18n-ph="ph.npPkg" placeholder="包名" class="flex1">
-      </div>
-      <label class="fld" style="margin-top:var(--gap)"><span data-i18n="lbl.recMode">录制方式</span>
-        <select id="npScope">
-          <option value="pkg" data-i18n="opt.rec.pkg">指定包名录取</option>
-          <option value="all" data-i18n="opt.rec.all">全场录取（不填包名）</option>
-        </select>
-      </label>
-      <p class="fldcap" data-i18n="prof.recModeHint"></p>
-      <div class="row">
-        <input type="time" id="npTime" value="07:30" style="flex:none;width:116px">
-        <button id="btnPAdd" class="primary flex1" data-i18n="btn.add">＋ 新增</button>
-      </div>
+      <details class="fold line">
+        <summary class="item">
+          <span class="t grow" data-i18n="card.new.title">新增任务</span><span class="chev" aria-hidden="true"></span>
+        </summary>
+        <div class="fbody">
+          <div class="item stack">
+            <label class="fld"><span data-i18n="lbl.taskName">任务名</span>
+              <input type="text" id="npName" autocomplete="off"></label>
+            <label class="fld"><span data-i18n="lbl.pkg">包名</span>
+              <input type="text" id="npPkg" data-i18n-ph="ph.npPkg" placeholder="包名（可留空）" autocomplete="off" autocapitalize="off"></label>
+          </div>
+          <div class="item">
+            <label class="grow t" for="npScope" data-i18n="lbl.recMode">录制方式</label>
+            <select id="npScope">
+              <option value="pkg" data-i18n="opt.rec.pkg">指定包名</option>
+              <option value="all" data-i18n="opt.rec.all">全场录取</option>
+            </select>
+          </div>
+          <div class="item">
+            <label class="grow t" for="npTime" data-i18n="lbl.time">执行时间</label>
+            <input type="time" id="npTime" value="07:30">
+          </div>
+          <div class="item stack">
+            <p class="s" style="margin:0" data-i18n="prof.recModeHint"></p>
+            <button id="btnPAdd" class="btn primary block" data-i18n="btn.add">新增</button>
+          </div>
+        </div>
+      </details>
     </div>
-  </details>
+  </section>
 
-  <details class="sec">
-    <summary data-i18n="card.pin.title">🔓 锁屏密码 (PIN)</summary>
-    <div class="sbody">
-      <p class="hint" data-i18n="card.pin.hint"></p>
-      <div class="row">
-        <input type="password" id="pin" data-i18n-ph="ph.pinSet" placeholder="已设置" inputmode="numeric" maxlength="8" autocomplete="off" class="flex1">
-        <button id="btnShow" class="ghost" data-i18n="btn.show">显示</button>
-        <button id="btnPin" class="primary" data-i18n="btn.save">保存</button>
-      </div>
-      <label class="sw"><span data-i18n="lbl.unlockMode">解锁方式</span>
-        <select id="mode" style="flex:none;width:auto">
+  <section class="sect">
+    <h2 class="label" data-i18n="card.pin.title">解锁</h2>
+    <div class="group">
+      <div class="item">
+        <label class="grow t" for="mode" data-i18n="lbl.unlockMode">解锁方式</label>
+        <select id="mode">
           <option value="pin" data-i18n="opt.pin">PIN 盲打解锁</option>
           <option value="pattern" data-i18n="opt.pattern">图案解锁（九宫格）</option>
           <option value="swipe" data-i18n="opt.swipe">上滑解锁（无密码）</option>
         </select>
-      </label>
+      </div>
+      <div class="item stack">
+        <div>
+          <label class="t" for="pin" data-i18n="lbl.pin">PIN 码</label>
+          <div class="s" data-i18n="card.pin.hint"></div>
+        </div>
+        <div class="ctl fill">
+          <input type="password" id="pin" data-i18n-ph="ph.pinSet" placeholder="已设置" inputmode="numeric" maxlength="8" autocomplete="off">
+          <button id="btnShow" class="btn text" data-i18n="btn.show">显示</button>
+          <button id="btnPin" class="btn primary" data-i18n="btn.save">保存</button>
+        </div>
+      </div>
       <!-- 图案在这里提前画好, 到点由服务端按点序一笔画完 —— 不需要读屏识别图案 -->
-      <div id="patBox" hidden>
-        <p class="fldcap" data-i18n="card.pat.hint"></p>
+      <div id="patBox" class="item stack" hidden>
+        <p class="s" style="margin:0" data-i18n="card.pat.hint"></p>
         <div class="patpad" id="patPad">
           <svg class="patsvg" id="patSvg" aria-hidden="true"><polyline id="patLine" points=""></polyline></svg>
           <button type="button" class="patdot" data-n="1">1</button>
@@ -315,98 +329,113 @@
           <button type="button" class="patdot" data-n="8">8</button>
           <button type="button" class="patdot" data-n="9">9</button>
         </div>
-        <div class="row">
-          <span class="pill patseq flex1" id="patStat" data-i18n="pat.unset">未画</span>
-          <button id="btnPatClear" class="ghost" data-i18n="btn.patClear">清除</button>
-          <button id="btnPatSave" class="primary" data-i18n="btn.patSave">保存图案</button>
+        <div class="ctl">
+          <span class="pill patseq grow" id="patStat" data-i18n="pat.unset">未画</span>
+          <button id="btnPatClear" class="btn text" data-i18n="btn.patClear">清除</button>
+          <button id="btnPatSave" class="btn primary" data-i18n="btn.patSave">保存图案</button>
         </div>
       </div>
-      <div class="row">
-        <button id="btnUnlockTest" class="ghost flex1" data-i18n="btn.unlockTest">🔒 测试解锁（锁屏→解锁）</button>
+      <div class="item">
+        <div class="grow s" style="margin:0" data-i18n="unlock.test.hint"></div>
+        <button id="btnUnlockTest" class="btn" data-i18n="btn.unlockTest">测试解锁</button>
       </div>
-      <p class="fldcap" data-i18n="unlock.test.hint"></p>
     </div>
-  </details>
+  </section>
 
-  <details class="sec">
-    <summary data-i18n="dev.title">📱 设备档案</summary>
-    <div class="sbody">
-      <div class="row">
-        <span class="pill" id="devBadge">—</span>
-        <label class="flex1" style="font-size:12px;color:var(--mut);display:flex;align-items:center;gap:7px;justify-content:flex-end">
-          <span data-i18n="dev.apply">启用覆盖</span><input type="checkbox" id="devApply">
-        </label>
-      </div>
-      <!-- 徽标说明必须可见: Android WebView 触屏不会弹 title, 只靠悬停提示等于没提示 -->
-      <p class="fldcap" data-i18n="dev.status.hint"></p>
-      <p class="hint" data-i18n="dev.hint.short" style="margin-top:10px"></p>
-      <div class="row">
-        <label class="fld flex1"><span data-i18n="dev.model">机型</span><input type="text" id="devModel" data-i18n-ph="dev.model"></label>
-        <label class="fld flex1"><span data-i18n="dev.label">显示名</span><input type="text" id="devLabel" data-i18n-ph="dev.label"></label>
-      </div>
-      <div class="row">
-        <button class="ghost flex1" id="btnDevDetect" data-i18n="dev.detect">🔍 自动检测本机</button>
-        <button class="primary flex1" id="btnDevSave" data-i18n="btn.save">保存</button>
-      </div>
-      <p class="fldcap" data-i18n="dev.apply.hint"></p>
-      <div class="grid4">
-        <label class="fld"><span data-i18n="dev.sw">屏宽</span><input type="number" id="devSW" min="300" step="1"></label>
-        <label class="fld"><span data-i18n="dev.sh">屏高</span><input type="number" id="devSH" min="300" step="1"></label>
-        <label class="fld"><span data-i18n="dev.d">显示 ID</span><input type="number" id="devD" min="0" step="1"></label>
-        <label class="fld"><span data-i18n="dev.dpi">DPI</span><input type="number" id="devDPI" min="0" step="1"></label>
-      </div>
-      <p class="fldcap" data-i18n="dev.pin">锁屏密码宫格</p>
-      <div class="grid4">
-        <label class="fld"><span data-i18n="dev.kx0">首格 X</span><input type="number" id="devPX0" min="1" step="1"></label>
-        <label class="fld"><span data-i18n="dev.ky0">首格 Y</span><input type="number" id="devPY0" min="1" step="1"></label>
-        <label class="fld"><span data-i18n="dev.kdx">列距</span><input type="number" id="devPDX" min="1" step="1"></label>
-        <label class="fld"><span data-i18n="dev.kdy">行距</span><input type="number" id="devPDY" min="1" step="1"></label>
-      </div>
-      <p class="fldcap" data-i18n="dev.pin.hint"></p>
-      <p class="fldcap" data-i18n="dev.pat">锁屏图案宫格</p>
-      <div class="grid4">
-        <label class="fld"><span data-i18n="dev.px0">第1格 X</span><input type="number" id="devPaX0" min="1" step="1"></label>
-        <label class="fld"><span data-i18n="dev.py0">第1格 Y</span><input type="number" id="devPaY0" min="1" step="1"></label>
-        <label class="fld"><span data-i18n="dev.pdx">横格距</span><input type="number" id="devPaDX" min="1" step="1"></label>
-        <label class="fld"><span data-i18n="dev.pdy">纵格距</span><input type="number" id="devPaDY" min="1" step="1"></label>
-      </div>
-      <p class="fldcap" data-i18n="dev.pat.hint"></p>
+  <section class="sect">
+    <h2 class="label" data-i18n="card.misc.title">选项</h2>
+    <div class="group">
+      <label class="item"><span class="grow t" data-i18n="lbl.watchOpen">每日首次打开工行自动浇水</span><input type="checkbox" class="switch" id="watch"></label>
+      <label class="item"><span class="grow t" data-i18n="lbl.sleepAfter">浇完自动熄屏</span><input type="checkbox" class="switch" id="sleep"></label>
+      <label class="item"><span class="grow t" data-i18n="lbl.cleanupAfter">任务结束后退出应用</span><input type="checkbox" class="switch" id="cleanup"></label>
+      <label class="item">
+        <span class="grow"><span class="t" data-i18n="lbl.captcha">自动处理验证码</span><span class="s" id="captchaHint" data-i18n="lbl.captchaHint" style="display:block"></span></span>
+        <input type="checkbox" class="switch" id="captcha">
+      </label>
     </div>
-  </details>
+  </section>
 
-  <details class="sec">
-    <summary data-i18n="card.misc.title">⚙️ 其它</summary>
-    <div class="sbody">
-      <label class="sw"><span data-i18n="lbl.watchOpen">每日首次打开工行自动浇水</span><input type="checkbox" id="watch"></label>
-      <label class="sw"><span data-i18n="lbl.sleepAfter">浇完自动熄屏</span><input type="checkbox" id="sleep"></label>
-      <label class="sw"><span data-i18n="lbl.cleanupAfter">跑完清理后台（释放内存）</span><input type="checkbox" id="cleanup"></label>
-      <p class="hint" data-i18n="lbl.cleanupHint" style="margin-top:6px"></p>
-    </div>
-  </details>
+  <section class="sect">
+    <h2 class="label" data-i18n="card.adv.title">高级</h2>
+    <div class="group">
+      <details class="fold">
+        <summary class="item">
+          <span class="t grow" data-i18n="card.chk.title">触发检查</span>
+          <span class="val"><span id="chkSum"></span><span class="chev" aria-hidden="true"></span></span>
+        </summary>
+        <div class="fbody">
+          <p class="s" style="margin:var(--s3) var(--s4) 0" data-i18n="card.chk.hint"></p>
+          <div id="chk"></div>
+        </div>
+      </details>
 
-  <details class="sec">
-    <summary data-i18n="card.chk.title">🔬 触发检查（没浇时看这里）</summary>
-    <div class="sbody">
-      <p class="hint" data-i18n="card.chk.hint"></p>
-      <div id="chk"></div>
-    </div>
-  </details>
+      <details class="fold line">
+        <summary class="item">
+          <span class="t grow" data-i18n="card.log.title">运行日志</span><span class="chev" aria-hidden="true"></span>
+        </summary>
+        <div class="fbody">
+          <div class="item">
+            <span class="grow s" style="margin:0" data-i18n="card.log.hint"></span>
+            <button id="btnLog" class="btn" data-i18n="btn.logRefresh">刷新</button>
+          </div>
+          <pre id="log" data-i18n="log.empty">(no log yet)</pre>
+        </div>
+      </details>
 
-  <details class="sec">
-    <summary data-i18n="card.log.title">📜 运行日志</summary>
-    <div class="sbody">
-      <div class="row">
-        <p class="hint flex1" data-i18n="card.log.hint"></p>
-        <button id="btnLog" class="small ghost" data-i18n="btn.logRefresh">刷新</button>
-      </div>
-      <pre id="log" data-i18n="log.empty">(no log yet)</pre>
+      <details class="fold line">
+        <summary class="item">
+          <span class="t grow" data-i18n="dev.title">设备档案</span>
+          <span class="val"><span class="pill" id="devBadge">—</span><span class="chev" aria-hidden="true"></span></span>
+        </summary>
+        <div class="fbody">
+          <label class="item">
+            <span class="grow"><span class="t" data-i18n="dev.apply">启用覆盖</span><span class="s" data-i18n="dev.hint.short" style="display:block"></span></span>
+            <input type="checkbox" class="switch" id="devApply">
+          </label>
+          <div class="item stack">
+            <div class="grid2">
+              <label class="fld"><span data-i18n="dev.model">机型</span><input type="text" id="devModel" autocomplete="off" autocapitalize="off"></label>
+              <label class="fld"><span data-i18n="dev.label">显示名</span><input type="text" id="devLabel" autocomplete="off"></label>
+            </div>
+            <div class="grid2">
+              <button class="btn" id="btnDevDetect" data-i18n="dev.detect">自动检测本机</button>
+              <button class="btn primary" id="btnDevSave" data-i18n="btn.save">保存</button>
+            </div>
+          </div>
+          <div class="item stack">
+            <div class="grid2">
+              <label class="fld"><span data-i18n="dev.sw">屏宽</span><input type="number" id="devSW" min="300" step="1" inputmode="numeric"></label>
+              <label class="fld"><span data-i18n="dev.sh">屏高</span><input type="number" id="devSH" min="300" step="1" inputmode="numeric"></label>
+              <label class="fld"><span data-i18n="dev.d">显示 ID</span><input type="number" id="devD" min="0" step="1" inputmode="numeric"></label>
+              <label class="fld"><span data-i18n="dev.dpi">DPI</span><input type="number" id="devDPI" min="0" step="1" inputmode="numeric"></label>
+            </div>
+          </div>
+          <div class="item stack">
+            <div class="sub" data-i18n="dev.pin">锁屏密码宫格</div>
+            <div class="grid2">
+              <label class="fld"><span data-i18n="dev.kx0">首格 X</span><input type="number" id="devPX0" min="1" step="1" inputmode="numeric"></label>
+              <label class="fld"><span data-i18n="dev.ky0">首格 Y</span><input type="number" id="devPY0" min="1" step="1" inputmode="numeric"></label>
+              <label class="fld"><span data-i18n="dev.kdx">列距</span><input type="number" id="devPDX" min="1" step="1" inputmode="numeric"></label>
+              <label class="fld"><span data-i18n="dev.kdy">行距</span><input type="number" id="devPDY" min="1" step="1" inputmode="numeric"></label>
+            </div>
+            <p class="s" style="margin:0" data-i18n="dev.pin.hint"></p>
+          </div>
+          <div class="item stack">
+            <div class="sub" data-i18n="dev.pat">锁屏图案宫格</div>
+            <div class="grid2">
+              <label class="fld"><span data-i18n="dev.px0">第1格 X</span><input type="number" id="devPaX0" min="1" step="1" inputmode="numeric"></label>
+              <label class="fld"><span data-i18n="dev.py0">第1格 Y</span><input type="number" id="devPaY0" min="1" step="1" inputmode="numeric"></label>
+              <label class="fld"><span data-i18n="dev.pdx">横格距</span><input type="number" id="devPaDX" min="1" step="1" inputmode="numeric"></label>
+              <label class="fld"><span data-i18n="dev.pdy">纵格距</span><input type="number" id="devPaDY" min="1" step="1" inputmode="numeric"></label>
+            </div>
+            <p class="s" style="margin:0" data-i18n="dev.pat.hint"></p>
+          </div>
+        </div>
+      </details>
     </div>
-  </details>
+  </section>
 </main>
-
-<footer>
-  <div id="footver"></div>
-</footer>
+</div>
 
 <script type="module" src="./app.js"></script>
 </body>
