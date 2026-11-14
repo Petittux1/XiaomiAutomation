@@ -1,4 +1,4 @@
-# XiaomiAutomation
+﻿# XiaomiAutomation
 
 [中文](README.md) · [English](README.en.md) · [Français](README.fr.md)
 
@@ -68,7 +68,7 @@ PIN намеренно принимается **только через пере
 
 ## Установка
 
-1. Скачайте `XiaomiAutomation-v0.13.4.zip` из раздела Releases.
+1. Скачайте `XiaomiAutomation-v0.14.0.zip` из раздела Releases.
 2. Прошейте этот zip в KernelSU / Magisk.
 3. Перезагрузитесь, откройте WebUI модуля и при необходимости задайте способ разблокировки и PIN.
 4. Для записываемой задачи укажите имя пакета целевого приложения; переключитесь на это приложение и нажмите «Начать запись», а по завершении — «Остановить запись».
@@ -192,7 +192,7 @@ bash tools/build_zip.sh
 Скрипт запишет следующий файл в родительский каталог:
 
 ```text
-XiaomiAutomation-v0.13.4.zip
+XiaomiAutomation-v0.14.0.zip
 ```
 
 ## Лицензия

@@ -6,7 +6,7 @@ PATH=/system/bin:/system/xbin:/sbin:/vendor/bin:$PATH
 export PATH
 # icbc_daily_water / webctl.sh v0.13.0 - WebUI 助手 (由 KSU 管理器 WebView 以 root 调用)
 # 用法: webctl.sh status|setpin|setpattern|settime|setdays|setenable|setmode|setopen|
-#        setsleep|setwatch|setcleanup|unlock|trigger[NAME]|restart|log|profiles|
+#        setsleep|setwatch|setcleanup|setcaptcha|unlock|trigger[NAME]|restart|log|profiles|
 #        profile add/addicbc/del/set|record start/stop/status|device get|set|detect
 M=/data/adb/modules/icbc_daily_water
 CFG=/data/adb/icbc_water/sched.conf
@@ -111,6 +111,7 @@ patternok() {
   return 0
 }
 
+# >>> SLOT_SHARED  本块 service.sh 与 webctl.sh 必须逐字一致 (回归第 12 节比对); 两边各自加载, 无共享库
 # HHMM → 当日分钟数 (防前导0八进制坑, 非法值返回0)
 hhmm2m() {
   case "$1" in
@@ -121,6 +122,49 @@ hhmm2m() {
     *) echo 0;;
   esac
 }
+
+# 本次命中的是哪一天的班次 (YYYYMMDD); 不在触发窗口内则输出空。
+# $1=定时分钟 $2=当前分钟 $3=今天 $4=昨天 (取不到则空 => 不做跨零点衔接)
+# 跨零点窗口 (23:01 之后的定时, 零点后仍在 60 分钟内) 属于「昨天」那一班, 必须按昨天记账:
+# 否则零点一过 state.txt(昨天) != 今天, 23:xx 已经跑完的任务会在 00:00 被当成没跑再触发一次。
+slot_date() {
+  if [ $2 -ge $1 ] && [ $2 -le $(($1 + 60)) ]; then echo "$3"
+  elif [ $1 -gt 1380 ] && [ $2 -le $(($1 + 60 - 1440)) ] && [ -n "$4" ]; then echo "$4"
+  fi
+}
+
+# 昨天的日期 YT / 星期 YW, 只有零点后第一小时 (跨零点窗口) 用得到; $1=epoch $2=当前分钟。
+# 取「今天零点前一小时」而不是 NOW-86400, 免得夏令时 23 小时那天算成前天。
+# 任何一个取不到/格式不对就两个都清空 = 不衔接 (宁可不补跑, 也不误触发, 也不拿今天的星期顶替)。
+yday_set() {
+  YT=; YW=
+  [ $2 -le 60 ] || return 0
+  YS=$(($1 - $2 * 60 - 3600))
+  YT=$(date -d @$YS +%Y%m%d 2>/dev/null); YW=$(date -d @$YS +%u 2>/dev/null)
+  case "$YT" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;; *) YT=; YW=;; esac
+  case "$YW" in [1-7]) ;; *) YT=; YW=;; esac
+}
+
+# 按定时 $1 (HHMM) 和当前 NOWM/T/YT/YW 选班次: PT=班次日期 (窗口外 = 今天),
+# PW=1 在触发窗口内, PDW=班次的星期 (班次就是今天则空, day_ok 自己取今天)。
+slot_pick() {
+  PT=$(slot_date $(hhmm2m $1) $NOWM $T "$YT")
+  PW=0; PDW=
+  [ -n "$PT" ] && PW=1
+  [ -n "$PT" ] && [ "$PT" != "$T" ] && PDW=$YW
+  PT=${PT:-$T}
+}
+
+# 失败计数 try.txt 按班次记: 内容「班次日期 次数」。$1=文件 $2=班次 -> 该班次的失败次数。
+# 别的班次 / 旧格式 (只有一个数字, 不知道是哪天的) 一律算 0 —— 否则失败满 3 次的任务会被永久挡住。
+try_get() {
+  TG=$(cat "$1" 2>/dev/null)
+  case "$TG" in
+    "$2 "*) TG=${TG#"$2 "}; case "$TG" in ''|*[!0-9]*) echo 0;; *) echo "$TG";; esac;;
+    *) echo 0;;
+  esac
+}
+# <<< SLOT_SHARED
 
 # profile 目录名/slug 校验: 空拒; 禁空白/斜杠/引号/壳元字符; 允中英数_横线; 长度<=24
 slugok() {
@@ -218,11 +262,12 @@ prof_line() {
   P_NAME=; P_TYPE=; P_PKG=; P_SCHED=; P_ENABLE=; P_CLEANUP=; P_SCALE=
   P_DAYS=; P_SCOPE=; P_HOME=
   [ -f $CD/conf ] && . $CD/conf 2>/dev/null
-  T0=$(date +%Y%m%d)
+  # 完成与否按班次看, 与 service.sh 一致 (零点后衔接段显示的是昨晚那一班); 上下文由 list_profiles 备好
+  slot_pick ${P_SCHED:-$ST}
   PD=no
-  [ -f $CD/state.txt ] && [ "$(cat $CD/state.txt 2>/dev/null)" = "$T0" ] && PD=yes
-  PTRY=0
-  [ -f $CD/try.txt ] && PTRY=$(cat $CD/try.txt 2>/dev/null)
+  [ -f $CD/state.txt ] && [ "$(cat $CD/state.txt 2>/dev/null)" = "$PT" ] && PD=yes
+  # 只显示当前班次的失败次数 (与 service.sh 封顶用的是同一个数)
+  PTRY=$(try_get $CD/try.txt $PT)
   PACTS=0
   # sw@DUR 是新格式; 同时兼容旧 sw 空格格式
   [ -f $CD/actions.rx ] && PACTS=$(grep -cE '^W[0-9]+ (tap|sw@[0-9]+|sw)($| )' $CD/actions.rx 2>/dev/null)
@@ -232,6 +277,11 @@ prof_line() {
 
 list_profiles() {
   mkdir -p $PFX 2>/dev/null
+  # 班次上下文 (slot_pick 用), 与 service.sh 主循环同样取法
+  T=$(date +%Y%m%d); NOWM=$(hhmm2m $(date +%H%M))
+  yday_set $(date +%s) $NOWM
+  ST=${SCHED_TIME:-$(sed -n 's/^SCHED_TIME=//p' $CFG 2>/dev/null | head -1)}
+  ST=${ST:-0730}
   for CD in $PFX/*; do
     [ -d "$CD" ] || continue
     prof_line "$CD"
@@ -429,22 +479,26 @@ case "$1" in
     # 有新包在 modules_update 等重启就直说, 免得界面显示新版本、跑的却是旧代码
     PU=$(pending_new_ver)
     if [ -n "$PU" ]; then echo "update: $PU"; else echo "update: none"; fi
+    if [ -f $CFG ]; then . $CFG; fi
     T=$(date +%Y%m%d)
+    NOWT=$(date +%H%M); NOWM=$(hhmm2m $NOWT)
+    yday_set $(date +%s) $NOWM
+    # 班次与 service.sh 同一套: 零点后衔接段看的是昨晚那一班, 否则 23:xx 跑完后这里会误报 pending
+    slot_pick $SCHED_TIME
     # DONE 看内置 icbc profile (脚本型工行浇水); FORCE 不写 => 可反复测试永不污染
     IDONE=no
-    if [ -f $PFX/icbc/state.txt ] && [ "$(cat $PFX/icbc/state.txt 2>/dev/null)" = "$T" ]; then IDONE=yes; fi
+    if [ -f $PFX/icbc/state.txt ] && [ "$(cat $PFX/icbc/state.txt 2>/dev/null)" = "$PT" ]; then IDONE=yes; fi
     if [ "$IDONE" = "yes" ]; then
       echo "today: DONE"
     else
       echo "today: pending"
     fi
-    ICT=0
-    [ -f $PFX/icbc/try.txt ] && ICT=$(cat $PFX/icbc/try.txt 2>/dev/null)
+    ICT=$(try_get $PFX/icbc/try.txt $PT)
     echo "fail_times: $ICT"
     # 内置工行任务在不在 (用户可能已删除): 界面据此决定要不要显示「恢复内置工行」
     if [ -f $PFX/icbc/conf ]; then echo "icbc_present=yes"; else echo "icbc_present=no"; fi
-    if [ -f $CFG ]; then . $CFG; fi
-    NOWT=$(date +%H%M)
+    # 验证码求解依赖 Termux Python (numpy+Pillow); 没有时界面提示, 开关无效
+    if [ -x /data/data/com.termux/files/usr/bin/python ]; then echo "captcha_py=yes"; else echo "captcha_py=no"; fi
     LAST=0
     [ -f $M/last.txt ] && LAST=$(cat $M/last.txt 2>/dev/null)
     I=$(( $(date +%s) - ${LAST:-0} ))
@@ -454,14 +508,11 @@ case "$1" in
     echo "=== 触发检查 ==="
     echo "svc=$SVC enable=${SCHED_ENABLE:-1} screen=$A now=$NOWT sched=$SCHED_TIME last_ago=$I"
     # 窗口: 内置工行定时 (到点后 60 分钟内, 跨零点衔接)
-    NOWM_A=$(hhmm2m $NOWT); SCHEDM_A=$(hhmm2m $SCHED_TIME)
-    W=0
-    if [ $NOWM_A -ge $SCHEDM_A ] && [ $NOWM_A -le $((SCHEDM_A + 60)) ]; then W=1; fi
-    if [ $SCHEDM_A -gt 1380 ] && [ $NOWM_A -le $((SCHEDM_A + 60 - 1440)) ]; then W=1; fi
-    if [ $W -eq 1 ]; then echo "window_ok=yes"; else echo "window_ok=no"; fi
+    if [ $PW -eq 1 ]; then echo "window_ok=yes"; else echo "window_ok=no"; fi
     if [ "$IDONE" = "yes" ]; then echo "done_ok=yes"; else echo "done_ok=no"; fi
     # 今天是不是执行日 (全局 SCHED_DAYS; 单个任务的 P_DAYS 各自看 profile 行)
-    DOW=$(date +%u 2>/dev/null)
+    # 衔接段按昨晚那一班的星期 (PDW), 其余看今天
+    DOW=${PDW:-$(date +%u 2>/dev/null)}
     DLIST=${SCHED_DAYS:-1234567}
     DAYOK=yes
     case "$DLIST" in
@@ -553,6 +604,10 @@ case "$1" in
     ;;
   setcleanup)
     case "$2" in 1|0) setval CLEANUP_AFTER "$2";; *) echo "ERR cleanup 0/1"; exit 1;; esac
+    ;;
+  setcaptcha)
+    # 回放/录制时自动识别并求解验证码 (需 Termux Python; 缺省开)
+    case "$2" in 1|0) setval CAPTCHA_SOLVE "$2";; *) echo "ERR captcha 0/1"; exit 1;; esac
     ;;
   profiles)
     list_profiles
@@ -794,7 +849,7 @@ case "$1" in
     tail -60 $LOG 2>/dev/null || echo "(no log yet)"
     ;;
   *)
-    echo "usage: webctl.sh status|setpin|setpattern|settime|setdays|setenable|setmode|setopen|setsleep|setwatch|setcleanup|unlock|trigger[NAME]|restart|log|profiles|profile add/addicbc/del/set|record start/stop/status|device get|set|detect"
+    echo "usage: webctl.sh status|setpin|setpattern|settime|setdays|setenable|setmode|setopen|setsleep|setwatch|setcleanup|setcaptcha|unlock|trigger[NAME]|restart|log|profiles|profile add/addicbc/del/set|record start/stop/status|device get|set|detect"
     ;;
 esac
 exit 0

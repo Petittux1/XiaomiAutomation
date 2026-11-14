@@ -1,0 +1,1013 @@
+# icbc_daily_water / captcha/capsolve.py  验证码识别与求解 (纯图像, numpy + Pillow)
+# 只在回放/录制期间由 captcha.sh 拉起, 会话结束即退出; 详见 .agent/captcha_impl.md。
+#   python capsolve.py detect IMG          -> 一行 JSON (离线检测/规划, 不注入任何输入)
+#   python capsolve.py worker MODE OWNER IN OUT FLAG
+#        MODE=replay: 从 IN(FIFO) 读 "check", 截屏->检测->求解, 向 OUT 回一行结果
+#        MODE=record: 每 ~0.7 s 截屏检测; 发现验证码时建 FLAG(录制据此暂停), 求解, 消失后删 FLAG
+# 类型: icon(图标点选, 有真机样本) / word(文字点选, 需可选 ddddocr) / slider(滑块); 后两者未经真机验证。
+import itertools, json, os, select, struct, subprocess, sys, time
+
+if "site" not in sys.modules:
+    # captcha.sh 以 -I -S 启动 (root 跑 Termux 的解释器): 不读 PYTHON* 环境变量、不加用户 site、
+    # 不执行 site-packages 里的 .pth / sitecustomize; 这里只把解释器自带的 site-packages 加回来。
+    sys.path.append(os.path.join(sys.prefix, "lib", "python%d.%d" % sys.version_info[:2], "site-packages"))
+
+import numpy as np
+from PIL import Image, ImageFilter
+
+DISPLAY = os.environ.get("CAP_DISPLAY", "")
+LOGF = os.environ.get("CAP_LOG", "")
+REFRESH_MAX = 2          # 每个验证码最多刷新次数 (厂商 ~6 次/15 s 即封, 见 fixtures/7_toomany)
+REFRESH_GAP = 3.5        # 两次刷新之间至少间隔 (秒)
+TAP_GAP = 0.8            # 点选间隔, 真机验证 0.8 s 可通过
+ICON_MIN = float(os.environ.get("CAP_ICON_MIN", "0.60"))  # 图标匹配最低分, 低于则刷新
+STAMP = os.environ.get("CAP_STAMP", "")   # 上次刷新时刻, 跨回放尝试持久化 (保证刷新间隔)
+OWNER = 0                                 # worker 的主人 PID; 每次注入前确认它还活着
+
+
+class OwnerGone(SystemExit):
+    pass
+
+
+def owner_alive():
+    if not OWNER:
+        return True
+    try:
+        os.kill(OWNER, 0)
+        return True
+    except OSError:
+        return False
+
+
+def log(msg):
+    line = time.strftime("%m%d-%H%M%S") + " CAPTCHA " + msg
+    if LOGF:
+        try:
+            with open(LOGF, "a") as f:
+                f.write(line + "\n")
+        except OSError:
+            pass
+    else:
+        print(line, file=sys.stderr)
+
+
+# ---------------- 图像读取 ----------------
+def from_raw(data):
+    """screencap 无 -p 的原始输出: w,h,fmt[,dataspace] 头 + RGBA 像素。"""
+    w, h, fmt = struct.unpack("<III", data[:12])
+    hdr = len(data) - w * h * 4
+    if w < 100 or h < 100 or hdr not in (12, 16):
+        raise ValueError("raw screencap header w=%d h=%d hdr=%d" % (w, h, hdr))
+    a = np.frombuffer(data, np.uint8, count=w * h * 4, offset=hdr).reshape(h, w, 4)
+    return a[..., 2::-1] if fmt == 5 else a[..., :3]   # 5 = BGRA_8888
+
+
+def load(path):
+    with open(path, "rb") as f:
+        head = f.read(8)
+    if head.startswith(b"\x89PNG") or head[:2] == b"\xff\xd8":
+        return np.asarray(Image.open(path).convert("RGB"))
+    with open(path, "rb") as f:
+        return from_raw(f.read())
+
+
+# 系统程序不能继承 Termux 的 LD_LIBRARY_PATH (真机: screencap 报 cannot find libmediandk.so)
+SYS_ENV = {k: v for k, v in os.environ.items() if k not in ("LD_LIBRARY_PATH", "LD_PRELOAD")}
+SYS_ENV["PATH"] = "/system/bin:/system/xbin:/vendor/bin"
+
+
+def _sys(cmd, out=subprocess.DEVNULL, timeout=15):
+    return subprocess.run(cmd, stdout=out, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, env=SYS_ENV, timeout=timeout)
+
+
+def pick_display():
+    """多屏机型 (17 Pro 有背屏) 不指定 -d 时 screencap 只是「碰巧」取第一块; 取面积最大的那块 = 主屏。"""
+    global DISPLAY
+    if DISPLAY:
+        return DISPLAY
+    try:
+        txt = _sys(["/system/bin/dumpsys", "SurfaceFlinger", "--display-id"], out=subprocess.PIPE).stdout.decode("utf-8", "replace")
+    except Exception:
+        return ""
+    ids = [ln.split()[1] for ln in txt.splitlines() if ln.startswith("Display ") and len(ln.split()) > 1 and ln.split()[1].isdigit()]
+    if len(ids) > 1:
+        best = 0
+        for i in ids:
+            try:
+                head = _sys(["/system/bin/screencap", "-d", i], out=subprocess.PIPE).stdout[:8]
+                w, h = struct.unpack("<II", head)
+            except Exception:
+                continue
+            if w * h > best:
+                best, DISPLAY = w * h, i
+    return DISPLAY
+
+
+def capture():
+    r = _sys(["/system/bin/screencap"] + (["-d", DISPLAY] if DISPLAY else []), out=subprocess.PIPE, timeout=10)
+    return from_raw(r.stdout)
+
+
+# ---------------- 连通域 (行程编码 + 并查集, 无 scipy) ----------------
+def components(mask):
+    """8 连通域。返回 (label 图, [(x0,y0,x1,y1,area), ...]), label 从 1 开始。"""
+    h, w = mask.shape
+    m = np.zeros((h, w + 2), np.int8)
+    m[:, 1:-1] = mask
+    d = np.diff(m, axis=1)
+    ry, rs = np.nonzero(d == 1)
+    _, re_ = np.nonzero(d == -1)       # 按行优先顺序, 起止一一对应
+    n = len(ry)
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    rowstart = np.searchsorted(ry, np.arange(h + 1))
+    for y in range(1, h):
+        a0, a1 = rowstart[y - 1], rowstart[y]
+        b0, b1 = rowstart[y], rowstart[y + 1]
+        i, j = a0, b0
+        while i < a1 and j < b1:
+            # 8 连通: [s, e) 与 [s', e') 在扩 1 后相交
+            if rs[i] <= re_[j] and rs[j] <= re_[i]:
+                ri, rj = find(i), find(j)
+                if ri != rj:
+                    parent[max(ri, rj)] = min(ri, rj)
+            if re_[i] < re_[j]:
+                i += 1
+            else:
+                j += 1
+    roots = np.array([find(i) for i in range(n)], dtype=np.int64)
+    uniq, lab = np.unique(roots, return_inverse=True)
+    lab = lab + 1
+    out = np.zeros((h, w), np.int32)
+    boxes = [[w, h, -1, -1, 0] for _ in uniq]
+    for k in range(n):
+        y, s, e, L = int(ry[k]), int(rs[k]), int(re_[k]), int(lab[k])
+        out[y, s:e] = L
+        b = boxes[L - 1]
+        if s < b[0]: b[0] = s
+        if y < b[1]: b[1] = y
+        if e > b[2]: b[2] = e
+        if y + 1 > b[3]: b[3] = y + 1
+        b[4] += e - s
+    return out, [tuple(b) for b in boxes]
+
+
+def dilate(mask, r):
+    """方形 (2r+1) 膨胀, 可分离的移位 OR (PIL MaxFilter 在 r=5 时慢 40 倍)。"""
+    if r <= 0:
+        return mask
+    m = mask.astype(bool)
+    h = m.copy()
+    for s in range(1, r + 1):
+        h[:, s:] |= m[:, :-s]
+        h[:, :-s] |= m[:, s:]
+    v = h.copy()
+    for s in range(1, r + 1):
+        v[s:] |= h[:-s]
+        v[:-s] |= h[s:]
+    return v
+
+
+def runs(v, thr, gap=0):
+    """v > thr 的最长连续段 (允许 gap 个元素的断口) -> (start, end) 或 None。"""
+    best, cur, miss = None, None, 0
+    for i, x in enumerate(v):
+        if x > thr:
+            if cur is None:
+                cur = [i, i + 1]
+            cur[1] = i + 1
+            miss = 0
+        elif cur is not None:
+            miss += 1
+            if miss > gap:
+                if best is None or cur[1] - cur[0] > best[1] - best[0]:
+                    best = tuple(cur)
+                cur, miss = None, 0
+    if cur is not None and (best is None or cur[1] - cur[0] > best[1] - best[0]):
+        best = tuple(cur)
+    return best
+
+
+# ---------------- 结构检测: 白色弹窗 / 题头 / 图片 / 按钮 ----------------
+S = 4  # 粗检测下采样步长
+
+
+def find_modal(img):
+    """暗色遮罩上的白色弹窗 -> (x0,y0,x1,y1) 全分辨率, 否则 None。"""
+    sm = img[::S, ::S]
+    H, W = sm.shape[:2]
+    white = sm.min(2) >= 235
+    _, boxes = components(white)
+    lum = sm.mean(2)
+    best = None
+    for (x0, y0, x1, y1, area) in boxes:
+        bw, bh = x1 - x0, y1 - y0
+        if bw < 0.45 * W or bh < 0.12 * H or x0 < 2 or x1 > W - 2 or y0 < 2 or y1 > H - 2:
+            continue
+        m = 4
+        ring = np.concatenate([lum[max(0, y0 - m):y0, x0:x1].ravel(), lum[y1:y1 + m, x0:x1].ravel(),
+                               lum[y0:y1, max(0, x0 - m):x0].ravel(), lum[y0:y1, x1:x1 + m].ravel()])
+        if ring.size == 0 or ring.mean() > 110:   # 弹窗外必须是压暗的遮罩
+            continue
+        if best is None or bw * bh > best[2] * best[3]:
+            best = (x0, y0, bw, bh)
+    if best is None:
+        return None
+    x0, y0, bw, bh = best
+    return (x0 * S, y0 * S, (x0 + bw) * S, (y0 + bh) * S)
+
+
+def find_photo(img, modal):
+    x0, y0, x1, y1 = modal
+    reg = img[y0:y1:2, x0:x1:2]
+    nonw = reg.min(2) < 235
+    r = runs(nonw.mean(1), 0.6, gap=3)
+    if r is None:
+        return None
+    py0, py1 = r
+    c = runs(nonw[py0:py1].mean(0), 0.6, gap=3)
+    if c is None:
+        return None
+    px0, px1 = c
+    pw, ph = (px1 - px0) * 2, (py1 - py0) * 2
+    if pw < 0.5 * (x1 - x0) or ph < 0.25 * (y1 - y0):
+        return None
+    return (x0 + px0 * 2, y0 + py0 * 2, x0 + px1 * 2, y0 + py1 * 2)
+
+
+def find_hint_box(img, modal, photo):
+    """题头里的提示图: 一块非纯白(背景 ~252)的实心矩形, 内含灰色线稿图标。"""
+    x0, y0, x1, _ = modal
+    hy1 = photo[1]
+    reg = img[y0:hy1, x0:x1]
+    if reg.shape[0] < 20:
+        return None
+    m = reg.min(2) < 254
+    lab, boxes = components(m)
+    best = None
+    for (bx0, by0, bx1, by1, area) in boxes:
+        bw, bh = bx1 - bx0, by1 - by0
+        if bw < 60 or bh < 40 or area < 0.85 * bw * bh:
+            continue
+        if bw > 0.9 * (x1 - x0):
+            continue
+        if best is None or area > best[4]:
+            best = (bx0, by0, bx1, by1, area)
+    if best is None:
+        return None
+    return (x0 + best[0], y0 + best[1], x0 + best[2], y0 + best[3])
+
+
+def find_buttons(img, modal, photo):
+    """图片下方按钮栏: 最大的蓝色块 = 确认; 左侧灰色小图标按 x 排序 = [关闭, 刷新, ...]。"""
+    x0, _, x1, y1 = modal
+    by0 = photo[3]
+    reg = img[by0:y1, x0:x1].astype(np.int16)
+    if reg.shape[0] < 20:
+        return None, []
+    r, g, b = reg[..., 0], reg[..., 1], reg[..., 2]
+    blue = (b - r > 30) & (b > 150)
+    _, boxes = components(blue)
+    confirm = None
+    big = [bx for bx in boxes if bx[4] > 2000]
+    if big:
+        bx = max(big, key=lambda t: t[4])
+        confirm = (x0 + (bx[0] + bx[2]) // 2, by0 + (bx[1] + bx[3]) // 2)
+    grey = (reg.max(2) < 200) & (reg.max(2) - reg.min(2) < 30)
+    _, gb = components(dilate(grey, 3))
+    # 刷新图标是上下两段弧: 横向中心相近的块并成一个图标
+    groups = []
+    for bx in sorted((b for b in gb if b[4] > 100), key=lambda t: t[0] + t[2]):
+        if groups and abs((bx[0] + bx[2]) - (groups[-1][0] + groups[-1][2])) < 60:
+            g = groups[-1]
+            groups[-1] = [min(g[0], bx[0]), min(g[1], bx[1]), max(g[2], bx[2]), max(g[3], bx[3])]
+        else:
+            groups.append(list(bx[:4]))
+    icons = []
+    for (gx0, gy0, gx1, gy1) in groups:
+        w, h = gx1 - gx0, gy1 - gy0
+        if 30 <= w <= 140 and 30 <= h <= 140 and 0.6 < w / h < 1.6:
+            cx = x0 + (gx0 + gx1) // 2
+            if confirm is None or cx < confirm[0] - 150:
+                icons.append((cx, by0 + (gy0 + gy1) // 2))
+    icons.sort()
+    return confirm, icons
+
+
+def find_slider_track(img, modal, photo):
+    """图片下方横跨的滑轨 (非白, 宽 >= 图片 70%, 高 30..160)。"""
+    x0, _, x1, y1 = modal
+    reg = img[photo[3]:y1, photo[0]:photo[2]]
+    if reg.shape[0] < 30:
+        return None
+    nonw = reg.min(2) < 245
+    r = runs(nonw.mean(1), 0.7, gap=2)
+    if r is None or not (30 <= r[1] - r[0] <= 160):
+        return None, None
+    ty0, ty1 = photo[3] + r[0], photo[3] + r[1]
+    trk = img[ty0:ty1, photo[0]:photo[2]].astype(np.int16)
+    tw = trk.shape[1]
+    # 滑钮: 轨道左端一块与轨道底色明显不同的方块 (宽 5%..25% 轨长)
+    base = np.median(trk[:, tw // 2:].reshape(-1, 3), axis=0)
+    cols = np.nonzero((np.abs(trk - base).sum(2) > 60).mean(0) > 0.5)[0]
+    if not len(cols) or cols[0] > 0.1 * tw:
+        return None, None
+    run = runs(np.isin(np.arange(tw), cols).astype(float), 0.5)
+    if run is None or run[0] > 0.1 * tw or not (0.05 * tw <= run[1] - run[0] <= 0.25 * tw):
+        return None, None
+    return (photo[0], ty0, photo[2], ty1), (photo[0] + (run[0] + run[1]) // 2, (ty0 + ty1) // 2)
+
+
+def detect(img):
+    """-> dict(kind=none|icon|word|slider, ...) ; kind=none 时可带 modal(无图片的白框, 如「尝试过多」)。
+    只做结构判断, 不注入输入。word 还要等 OCR 读出题头「点击」才算数 (见 plan_word)。"""
+    modal = find_modal(img)
+    if modal is None:
+        return {"kind": "none"}
+    photo = find_photo(img, modal)
+    if photo is None:
+        # 无图白框: 厂商「尝试过多」锁 (红色实心圆标) 单独标成 locked, 调用方按失败处理
+        return {"kind": "locked" if find_lock(img, modal) else "none", "modal": modal}
+    d = {"kind": "none", "modal": modal, "photo": photo}
+    track, handle = find_slider_track(img, modal, photo)
+    if track is not None:
+        d.update(kind="slider", track=track, handle=handle)
+        return d
+    confirm, icons = find_buttons(img, modal, photo)
+    d.update(confirm=confirm, refresh=icons[1] if len(icons) >= 2 else (icons[0] if icons else None))
+    hint = find_hint_box(img, modal, photo)
+    if hint is not None:
+        n = len(split_hint(img, hint))
+        if 2 <= n <= 5 and confirm is not None:
+            d.update(kind="icon", hint=hint, n=n)
+        return d
+    head = img[modal[1]:photo[1], modal[0]:modal[2]]
+    # 文字点选候选: 题头有字 + 图片 + 图片下方的刷新/关闭小图标。仍只是候选 ——
+    # 题头 OCR 必须读出「依次点击…」句式才会动手 (plan_word), 普通「点击领取」弹窗到此为止。
+    if (head.max(2) < 110).sum() > 300 and icons:
+        d["kind"] = "word"
+    return d
+
+
+def find_lock(img, modal):
+    """无图白框里的红色实心圆 (fixtures/xmsq_icon_7_toomany: 「尝试过多」)。"""
+    x0, y0, x1, y1 = modal
+    reg = img[y0:y1:2, x0:x1:2].astype(np.int16)
+    r, g, b = reg[..., 0], reg[..., 1], reg[..., 2]
+    red = (r > 170) & (r - g > 60) & (r - b > 60)
+    _, boxes = components(red)
+    for (bx0, by0, bx1, by1, area) in boxes:
+        w, h = bx1 - bx0, by1 - by0
+        if 18 <= w <= 70 and 18 <= h <= 70 and 0.75 < w / h < 1.33 and area >= 0.5 * w * h:
+            return True
+    return False
+
+
+# ---------------- 图标点选 ----------------
+def split_hint(img, hint):
+    """提示图 -> 每个图标的 bool 掩码列表 (左到右)。相邻图标可能粘连: 按墨迹高度估个数再在投影谷底切。"""
+    x0, y0, x1, y1 = hint
+    reg = img[y0:y1, x0:x1].astype(np.int16)
+    ink = reg.mean(2) < 200
+    ys = np.nonzero(ink.any(1))[0]
+    if len(ys) < 10:
+        return []
+    ink = ink[ys[0]:ys[-1] + 1]
+    H = ink.shape[0]
+    pitch = 0.75 * (y1 - y0)   # 提示图里图标的槽宽 ~ 0.75 x 提示图高 (粘连时据此估个数)
+    col = ink.sum(0)
+    segs, cur = [], None
+    for x, v in enumerate(col):
+        if v > 0:
+            cur = [x, x + 1] if cur is None else [cur[0], x + 1]
+        elif cur is not None:
+            segs.append(cur); cur = None
+    if cur is not None:
+        segs.append(cur)
+    # 并掉窄碎片 (同一图标被空列断开)
+    merged = []
+    for s in segs:
+        if merged and (s[1] - s[0] < 0.35 * H or merged[-1][1] - merged[-1][0] < 0.35 * H) and s[0] - merged[-1][1] < 0.25 * H:
+            merged[-1][1] = s[1]
+        else:
+            merged.append(list(s))
+    out = []
+    for s0, s1 in merged:
+        w = s1 - s0
+        if w < 0.25 * H:
+            continue
+        n = max(1, int(round(w / pitch)))
+        cuts = [s0]
+        for k in range(1, n):
+            c = s0 + w * k // n
+            lo, hi = c - int(0.25 * H), c + int(0.25 * H)
+            cuts.append(lo + int(np.argmin(col[lo:hi])))
+        cuts.append(s1)
+        for a, b in zip(cuts, cuts[1:]):
+            m = np.zeros_like(ink)
+            m[:, a:b] = ink[:, a:b]
+            sub = m[:, a:b]
+            yy = np.nonzero(sub.any(1))[0]
+            if len(yy) and sub.sum() > 30:
+                out.append((sub[yy[0]:yy[-1] + 1], (x0 + (a + b) // 2, y0 + ys[0] + (yy[0] + yy[-1]) // 2)))
+    return out
+
+
+def icon_candidates(img, photo, step=2):
+    """图片中纯色图标 -> [(mask, (cx, cy) 全分辨率, bbox), ...]。"""
+    x0, y0, x1, y1 = photo
+    P = img[y0:y1:step, x0:x1:step].astype(np.int16)
+    U = [np.ascontiguousarray(img[y0:y1:step, x0:x1:step, ch]) for ch in range(3)]
+    h, w = P.shape[:2]
+    mx, mn = P.max(2), P.min(2)
+    chroma = mx - mn
+    flat = np.ones((h, w), bool)
+    for dy, dx in ((0, 1), (1, 0)):
+        dd = np.abs(P[dy:, dx:] - P[:h - dy, :w - dx]).max(2) < 8
+        flat[:h - dy, :w - dx] &= dd
+        flat[dy:, dx:] &= dd
+    seed = flat & (chroma >= 70) & (mx >= 90)
+    if seed.sum() < 50:
+        return []
+    q = (P[seed] // 24).astype(np.int32)
+    keys = q[:, 0] * 4096 + q[:, 1] * 64 + q[:, 2]
+    uk, cnt = np.unique(keys, return_counts=True)
+    order = np.argsort(-cnt)
+    minpix = 0.004 * w * h        # 图标笔画面积下限 (~1000 px @ 494x494)
+    seen = np.zeros((h, w), bool)
+    cands = []
+    cols = P[seed]
+    done = []
+    for idx in order[:40]:
+        if cnt[idx] < minpix * 0.25:
+            break
+        c = np.median(cols[keys == uk[idx]], axis=0)
+        if any(np.abs(c - e).max() <= 10 for e in done):
+            continue
+        done.append(c)
+        ar = np.arange(256)
+        cm = np.ones((h, w), bool)
+        for ch in range(3):   # 逐通道查表比 |P-c|.max(2) 快一个量级
+            cm &= (np.abs(ar - c[ch]) <= 26)[U[ch]]
+        cm &= ~seen
+        if cm.sum() < minpix:
+            continue
+        lab, boxes = components(dilate(cm, 5))
+        for L, (bx0, by0, bx1, by1, _) in enumerate(boxes, 1):
+            bw, bh = bx1 - bx0, by1 - by0
+            if not (0.05 * w <= max(bw, bh) <= 0.40 * w and min(bw, bh) >= 0.03 * w):
+                continue
+            sub = (lab[by0:by1, bx0:bx1] == L) & cm[by0:by1, bx0:bx1]
+            area = int(sub.sum())
+            dens = area / float(bw * bh)
+            if area < minpix or not (0.06 <= dens <= 0.70):
+                continue
+            box = P[by0:by1, bx0:bx1]
+            sd = float(box[sub].std(0).max())
+            # 纯色图标边缘是硬边: 掩码外 2..3 px 的一圈与图标色差很大; 天空/草地色块是渐变
+            ring = dilate(sub, 3) & ~dilate(sub, 1)
+            if not ring.any():
+                continue
+            jump = float((np.abs(box[ring] - c).max(1) > 60).mean())
+            if sd > 10 or jump < 0.5:
+                continue
+            seen[by0:by1, bx0:bx1] |= sub
+            cx = x0 + step * (bx0 + bx1) // 2
+            cy = y0 + step * (by0 + by1) // 2
+            cands.append((sub, (int(cx), int(cy)), (bx0, by0, bx1, by1), round(sd, 1), area, round(jump, 2)))
+    return cands
+
+
+def polar(mask, K=18, A=72):
+    """旋转/缩放归一的极坐标采样 (重心 + 回转半径), 先按尺度模糊以抵消线宽差异。"""
+    m = mask.astype(np.float32)
+    ys, xs = np.nonzero(mask)
+    cy, cx = ys.mean(), xs.mean()
+    rg = float(np.sqrt(((ys - cy) ** 2 + (xs - cx) ** 2).mean())) + 1e-3
+    pad = int(rg * 2) + 4
+    big = np.pad(m, pad)
+    blur = np.asarray(Image.fromarray((big * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(max(1.0, rg * 0.12))), np.float32) / 255
+    rr = rg * np.linspace(0.1, 1.9, K)
+    th = np.linspace(0, 2 * np.pi, A, endpoint=False)
+    X = (cx + pad + rr[:, None] * np.cos(th)[None]).round().astype(int)
+    Y = (cy + pad + rr[:, None] * np.sin(th)[None]).round().astype(int)
+    X = np.clip(X, 0, big.shape[1] - 1)
+    Y = np.clip(Y, 0, big.shape[0] - 1)
+    p = blur[Y, X]
+    p = p - p.mean()
+    return p / (np.linalg.norm(p) + 1e-6)
+
+
+def polar_sim(p, q):
+    """两极坐标图在所有旋转下的最大归一化相关 (沿角度轴 FFT 环形相关)。"""
+    c = np.fft.irfft((np.fft.rfft(p, axis=1) * np.conj(np.fft.rfft(q, axis=1))).sum(0), n=p.shape[1])
+    return float(c.max())
+
+
+def plan_icon(img, d):
+    hints = split_hint(img, d["hint"])
+    cands = icon_candidates(img, d["photo"])
+    if not hints or len(cands) < len(hints):
+        # 图里连够数的纯色图标都没有: 多半是带横幅的普通弹窗, 不是验证码 -> 不刷新、不点
+        return None, {"hints": len(hints), "cands": len(cands), "not_captcha": True}
+    hp = [polar(m) for m, _ in hints]
+    cp = [polar(c[0]) for c in cands]
+    Sm = np.array([[polar_sim(a, b) for b in cp] for a in hp])
+    best = max(itertools.permutations(range(len(cands)), len(hints)),
+               key=lambda p: sum(Sm[i, p[i]] for i in range(len(hints))))
+    scores = [float(Sm[i, best[i]]) for i in range(len(hints))]
+    info = {"hints": len(hints), "cands": len(cands), "scores": [round(s, 3) for s in scores]}
+    # 单项下限 + 均值下限: 已点过的图(带编号圆标, fixtures/13_clicked)均值只有 ~0.67, 不能再点
+    if min(scores) < ICON_MIN or sum(scores) / len(scores) < ICON_MIN + 0.15:
+        return None, info
+    return [cands[j][1] for j in best], info
+
+
+# ---------------- 文字点选 (可选 ddddocr, 懒加载) ----------------
+_dd = None
+_widx = None
+
+
+def _ddddocr():
+    """返回 (det, ocr) 或 None。cv2 缺失时用同目录 shim/ 下的最小替身。"""
+    global _dd
+    if _dd is None:
+        try:
+            try:
+                import cv2  # noqa: F401
+            except ImportError:
+                sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "shim"))
+            import ddddocr
+            import cv2
+            t0 = time.time()
+            _dd = (ddddocr.DdddOcr(det=True, show_ad=False), ddddocr.DdddOcr(show_ad=False))
+            log("word: ddddocr loaded in %.1f s (cv2=%s)" % (time.time() - t0, "shim" if "shim" in (getattr(cv2, "__file__", "") or "") else "opencv"))
+        except Exception as e:  # 缺包/模型载入失败 -> unsupported
+            log("word: ddddocr unavailable (%s)" % type(e).__name__)
+            _dd = False
+    return _dd or None
+
+
+def _word_index(ocr):
+    """字符 -> 概率矩阵列号 (概率矩阵的列序就是 get_charset() 的顺序, 缓存避免每次重建)。"""
+    global _widx
+    if _widx is None:
+        _widx = {c: i for i, c in enumerate(ocr.get_charset())}
+    return _widx
+
+
+def _png(im):
+    import io
+    b = io.BytesIO()
+    im.save(b, "PNG")
+    return b.getvalue()
+
+
+def word_targets(img, d):
+    """题头 OCR -> (目标字列表或 [], 原文)。目标字须都在 OCR 字符集里。无 ddddocr 时 ([], None)。"""
+    dd = _ddddocr()
+    if dd is None:
+        return [], None
+    ocr = dd[1]
+    x0, y0, x1, _ = d["modal"]
+    text = ocr.classification(Image.fromarray(np.ascontiguousarray(img[y0:d["photo"][1], x0:x1])))
+    chars = parse_word_targets(text)
+    charset = set(ocr.get_charset())
+    if any(c not in charset for c in chars):
+        chars = []
+    return chars, text
+
+
+def plan_word(img, d):
+    """请依次点击【…】: OCR 题头取目标字, ddddocr 检测框 x 每字多角度概率, 取最优联合分配 (同 cnki_captcha)。"""
+    dd = _ddddocr()
+    if dd is None:
+        return None, {"unsupported": "ddddocr"}
+    det, ocr = dd
+    index = _word_index(ocr)
+    chars, text = word_targets(img, d)
+    if not chars:
+        return None, {"header": text, "not_captcha": True}
+    px0, py0, px1, py1 = d["photo"]
+    pim = Image.fromarray(np.ascontiguousarray(img[py0:py1, px0:px1]))
+    boxes = det.detection(_png(pim))
+    if len(boxes) < len(chars):
+        return None, {"chars": chars, "boxes": len(boxes), "not_captcha": True}
+    Sm = np.zeros((len(chars), len(boxes)))
+    for j, (bx0, by0, bx1, by1) in enumerate(boxes):
+        crop = pim.crop((max(0, bx0 - 3), max(0, by0 - 3), bx1 + 3, by1 + 3))
+        for v in [crop] + [crop.rotate(a, expand=True, fillcolor=(255, 255, 255)) for a in (-40, -25, -12, 12, 25, 40)]:
+            r = ocr.classification(v, probability=True)
+            mat = np.array([row for step in r["probabilities"] for row in step], dtype=float)
+            for i, ch in enumerate(chars):
+                Sm[i, j] = max(Sm[i, j], float(mat[:, index[ch]].max()))
+    best = max(itertools.permutations(range(len(boxes)), len(chars)),
+               key=lambda p: sum(np.log(Sm[i, p[i]] + 1e-9) for i in range(len(chars))))
+    scores = [float(Sm[i, best[i]]) for i in range(len(chars))]
+    info = {"chars": chars, "scores": [round(s, 3) for s in scores]}
+    if min(scores) < 0.05:
+        return None, info
+    pts = []
+    for i in range(len(chars)):
+        bx0, by0, bx1, by1 = boxes[best[i]]
+        pts.append((px0 + (bx0 + bx1) // 2, py0 + (by0 + by1) // 2))
+    return pts, info
+
+
+WORD_CUES = ("依次点击", "依次點擊", "按顺序点击", "按順序點擊", "顺序点击")
+
+
+def parse_word_targets(text):
+    """只认验证码句式: 「请依次点击【乾 坤 震】」/「请依次点击: 乾坤震」-> ['乾','坤','震']。
+    必须有「依次点击」类提示词, 目标 2..5 个汉字; 「点击领取红包」这类普通弹窗返回 []。"""
+    t = text or ""
+    cue = next((k for k in WORD_CUES if k in t), None)
+    if cue is None:
+        return []
+    t = t[t.index(cue) + len(cue):]
+    for a, b in (("【", "】"), ("[", "]")):
+        if a in t and b in t[t.index(a) + 1:]:
+            t = t[t.index(a) + 1:]
+            t = t[:t.index(b)]
+            break
+    chars = [c for c in t if "\u4e00" <= c <= "\u9fff"]
+    return chars if 2 <= len(chars) <= 5 else []
+
+
+# ---------------- 滑块 (图像闭环; 未经真机验证) ----------------
+def _corr_row(img, k):
+    """img(h x W) 与核 k(h x w) 在 x 方向的有效互相关 -> 长 W-w+1 (FFT, 无 cv2.matchTemplate)。"""
+    sh = (img.shape[0] + k.shape[0], img.shape[1] + k.shape[1])
+    r = np.fft.irfft2(np.fft.rfft2(img, sh) * np.conj(np.fft.rfft2(k, sh)), sh)
+    return r[0, :img.shape[1] - k.shape[1] + 1]
+
+
+def slider_gap(band, mask, start):
+    """band: 背景灰度条 (高 = 块高 + 8), mask: 拼图块轮廓 (块高 x 块宽), start: 只在块右缘之后找。
+    返回 (缺口左缘 x, 置信度); 阴影 + 边缘两条线索, 同 cnki_captcha.slider_target。"""
+    band = band.astype(np.float32)
+    p = 4
+    m = np.pad(mask.astype(bool), p)
+    if band.shape[0] != m.shape[0]:
+        return None, 0.0
+    mw = mask.shape[1]
+    mf = m.astype(np.float32)
+    ring = (dilate(m, p) & ~m).astype(np.float32)
+    # 线索 1: 缺口是块形状的暗/亮区 -> 块内均值与外环均值之差
+    shade = np.abs(_corr_row(band, ring / max(ring.sum(), 1)) - _corr_row(band, mf / max(mf.sum(), 1)))
+    # 线索 2: 缺口边缘与块轮廓吻合 (梯度幅值 x 轮廓, 按局部能量归一)
+    gx = np.zeros_like(band); gy = np.zeros_like(band)
+    gx[:, 1:-1] = band[:, 2:] - band[:, :-2]
+    gy[1:-1, :] = band[2:, :] - band[:-2, :]
+    edge = np.hypot(gx, gy)
+    outline = (dilate(m, 1) & ~m).astype(np.float32)
+    edg = _corr_row(edge, outline) / (np.sqrt(np.maximum(_corr_row(edge ** 2, np.ones_like(outline)), 0) * outline.sum()) + 1e-6)
+    s0 = max(0, start - p)
+
+    def confidence(score):
+        s = score.copy()
+        s[:s0] = -1
+        g = int(np.argmax(s))
+        far = np.abs(np.arange(len(s)) - g) > mw * 0.6
+        far[:s0] = False
+        second = float(s[far].max()) if far.any() else 0.0
+        return g, float(s[g]) / max(second, 1e-6)
+
+    g1, c1 = confidence(shade)
+    g2, c2 = confidence(edg)
+    if abs(g1 - g2) <= 4 and max(c1, c2) >= 1.5:
+        return (g1 + g2) // 2 + p, max(c1, c2) * 1.5
+    g, c = (g1, c1) if c1 >= c2 else (g2, c2)
+    return g + p, c
+
+
+# ---------------- 输入注入 (仅 worker 用) ----------------
+DRY = os.environ.get("CAP_DRYRUN") == "1"   # 测试用: 只记日志, 不注入任何输入
+
+
+def _guard(what):
+    """每次注入前确认主人 (replay.sh / 录制 daemon) 还活着; 主人死了就立刻停手退出。"""
+    if not owner_alive():
+        log("owner %d gone, abort before %s" % (OWNER, what))
+        raise OwnerGone(0)
+
+
+def tap(x, y):
+    _guard("tap")
+    if DRY:
+        log("dry tap %d %d" % (x, y))
+        return
+    _sys(["/system/bin/input", "tap", str(int(x)), str(int(y))])
+
+
+def motion(ev, x, y):
+    if ev != "UP":   # 抬起总要发出去, 不能留下一个按住不放的手指
+        _guard("motion " + ev)
+    if DRY:
+        log("dry motion %s %d %d" % (ev, x, y))
+        return
+    _sys(["/system/bin/input", "motionevent", ev, str(int(x)), str(int(y))])
+
+
+class Session:
+    """一次回放/录制会话里的求解状态。刷新时刻写进 STAMP 文件, 调度器重试时也守住刷新间隔。"""
+
+    def __init__(self):
+        self.last_refresh = 0.0
+        try:
+            self.last_refresh = float(open(STAMP).read().strip()) if STAMP else 0.0
+        except (OSError, ValueError):
+            pass
+
+    def refresh(self, d):
+        if not d.get("refresh"):
+            return False
+        wait = REFRESH_GAP - (time.time() - self.last_refresh)
+        if wait > 0:
+            time.sleep(wait)
+        log("refresh tap %s" % (d["refresh"],))
+        tap(*d["refresh"])
+        self.last_refresh = time.time()
+        if STAMP:
+            try:
+                with open(STAMP, "w") as f:
+                    f.write("%.1f\n" % self.last_refresh)
+            except OSError:
+                pass
+        time.sleep(1.5)
+        return True
+
+    def solve(self, d):
+        """求解已检测到的验证码 -> (status, 说明)。
+        status: solved | fail (解不出 / 厂商锁 / 提交后出现无图对话框) | skip (不是验证码或不支持, 继续流程)。"""
+        kind = d["kind"]
+        acted = False
+        for attempt in range(REFRESH_MAX + 1):
+            t0 = time.time()
+            img = capture()
+            d = detect(img)
+            if d["kind"] == "locked":
+                return "fail", "locked: vendor 'too many attempts' dialog"
+            if d["kind"] == "none":
+                return ("solved", "gone") if acted else ("skip", "gone before solving")
+            kind = d["kind"]
+            if kind == "slider":
+                acted = True
+                ok, why = self.slide(img, d)
+                log("slider attempt %d: %s" % (attempt + 1, why))
+                if ok is True:
+                    return "solved", "slider (attempt %d)" % (attempt + 1)
+                if ok == "fail":
+                    return "fail", why
+            else:
+                pts, info = plan_icon(img, d) if kind == "icon" else plan_word(img, d)
+                log("%s plan %s pts=%s (%.0f ms)" % (kind, json.dumps(info, ensure_ascii=False), pts, (time.time() - t0) * 1000))
+                if info.get("unsupported"):
+                    return "skip", "unsupported:%s(%s)" % (kind, info["unsupported"])
+                if info.get("not_captcha") and not acted:
+                    # 结构像但内容不像验证码 (普通弹窗): 一下都不点, 也不刷新
+                    return "skip", "%s: not a captcha (%s)" % (kind, ",".join(sorted(k for k in info if k != "not_captcha")))
+                if pts:
+                    acted = True
+                    for (x, y) in pts:
+                        tap(x, y)
+                        time.sleep(TAP_GAP)
+                    if d.get("confirm"):
+                        tap(*d["confirm"])
+                    res = self.gone(3.0)
+                    if res is True:
+                        return "solved", "%s (attempt %d)" % (kind, attempt + 1)
+                    if res:
+                        return "fail", res
+                    log("%s: still present after submit" % kind)
+            if attempt < REFRESH_MAX:
+                time.sleep(1.0)
+                img2 = capture()
+                d2 = detect(img2)
+                if d2["kind"] == "locked":
+                    return "fail", "locked: vendor 'too many attempts' dialog"
+                if d2["kind"] == "none":
+                    return ("solved", "gone") if acted else ("skip", "gone")
+                x0, y0, x1, y1 = d["photo"]
+                changed = d2.get("photo") == d["photo"] and \
+                    np.abs(img2[y0:y1:8, x0:x1:8].astype(np.int16) - img[y0:y1:8, x0:x1:8]).mean() > 25
+                if changed:
+                    log("picture already replaced by the vendor, no refresh tap")
+                else:
+                    acted = True
+                    if not self.refresh(d2):
+                        time.sleep(REFRESH_GAP)   # 无刷新钮: 多数厂商失败后自动换图
+        return "fail", "unsolved:%s after %d refreshes" % (kind, REFRESH_MAX)
+
+    def gone(self, wait):
+        """提交后: True = 验证码消失; False = 还在; 字符串 = 失败原因 (厂商锁 / 无图对话框, 无法确认成功)。"""
+        end = time.time() + wait
+        while True:
+            time.sleep(0.6)
+            d = detect(capture())
+            if d["kind"] == "locked":
+                return "locked: vendor 'too many attempts' dialog after submit"
+            if d["kind"] == "none":
+                if d.get("modal"):
+                    return "picture-less dialog after submit, success not verified"
+                return True
+            if time.time() > end:
+                return False
+
+    def slide(self, img0, d):
+        """按住滑钮先挪 30 px, 两帧差分得拼图块, 找缺口, 分段拖到位并截图校正。未经真机验证。
+        返回 (True|False|"fail", 说明)。"""
+        hx, hy = d["handle"]
+        px0, py0, px1, py1 = d["photo"]
+        A = img0[py0:py1, px0:px1].astype(np.int16)
+        pos = 0
+        motion("DOWN", hx, hy)
+        try:
+            for k in (10, 20, 30):
+                motion("MOVE", hx + k, hy)
+            pos = 30
+            time.sleep(0.3)
+            B = capture()[py0:py1, px0:px1].astype(np.int16)
+            D = np.abs(A - B).sum(2) > 60
+            ys, xs = np.nonzero(D)
+            if len(ys) < 200:
+                return False, "piece did not move"
+            r0, r1 = int(ys.min()), int(ys.max()) + 1
+            a, b = int(xs.min()), int(xs.max()) + 1
+            if b - a - pos < 10:
+                return False, "piece too small"
+            mask = D[r0:r1, a:b - pos]
+            q0, q1 = r0 - 4, r1 + 4
+            if q0 < 0 or q1 > A.shape[0]:
+                return False, "piece at photo edge"
+            gx, conf = slider_gap(A[q0:q1].mean(2), mask, b - pos)
+            if gx is None or conf < 1.3:
+                return False, "gap confidence %.2f" % conf
+            need = gx - a
+            log("slider: piece x=%d gap x=%d conf=%.2f" % (a, gx, conf))
+            target = need
+            for _ in range(4):
+                n = max(2, int(abs(target - pos) // 30))
+                for i in range(1, n + 1):
+                    motion("MOVE", hx + pos + (target - pos) * i / n, hy + (i % 2))
+                pos = target
+                time.sleep(0.25)
+                C = capture()[py0 + r0:py0 + r1, px0:px1].astype(np.int16)
+                cols = np.nonzero((np.abs(C - A[r0:r1]).sum(2) > 60).any(0))[0]
+                if not len(cols):
+                    break
+                moved = int(cols.max()) + 1 - (b - 30)   # 块右缘相对原位的位移
+                err = need - moved
+                if abs(err) <= 3:
+                    break
+                target = pos + err   # 滑钮与块不是 1:1 时按实测补偿
+        finally:
+            motion("UP", hx + pos, hy)
+        res = self.gone(3.0)
+        if res is True:
+            return True, "released at +%d" % pos
+        return ("fail", res) if res else (False, "still present after release")
+
+
+class Throttle:
+    """同一类日志 60 s 内只记一次 (持续性错误不刷屏)。"""
+
+    def __init__(self, gap=60.0):
+        self.gap, self.last = gap, {}
+
+    def __call__(self, key, msg):
+        now = time.time()
+        if now - self.last.get(key, 0) >= self.gap:
+            self.last[key] = now
+            log(msg)
+
+
+def record_loop(ses, flag, idle):
+    """录制: 截屏检测。画面不变/录制暂停 (daemon 建 idle 标记) 时退避到 3 s, 出错同样退避且日志限频。"""
+    say = Throttle()
+    interval, prev = 0.7, None
+    while owner_alive():
+        t0 = time.time()
+        d = {"kind": "none"}
+        if idle and os.path.exists(idle):
+            interval = 3.0
+        else:
+            try:
+                img = capture()
+                sig = img[::16, ::16].astype(np.int16)
+                same = prev is not None and sig.shape == prev.shape and np.abs(sig - prev).mean() < 1.5
+                prev = sig
+                d = detect(img)
+                interval = min(3.0, interval * 1.5) if same and d["kind"] == "none" else 0.7
+            except Exception as e:
+                say("err", "record check error %s: %s (retrying every 3 s)" % (type(e).__name__, e))
+                interval = 3.0
+        if d["kind"] == "word":
+            chars = word_targets(img, d)[0] if _ddddocr() is not None else []
+            if not chars:   # 未经题头句式确认的文字点选候选: 不暂停、不点
+                say("word", "record: picture dialog without click-word prompt -> ignored")
+                d = {"kind": "none"}
+        if d["kind"] != "none":
+            open(flag, "w").close()
+            log("record: %s detected, recording paused" % d["kind"])
+            if d["kind"] == "locked":
+                st, why = "fail", "vendor lock dialog (not solvable)"
+            else:
+                st, why = ses.solve(d)
+            log("record: %s %s" % (st, why))
+            # 没解出也要等它消失 (用户可以手动处理), 期间新手势一律不录
+            while owner_alive() and detect(capture())["kind"] != "none":
+                time.sleep(1.0)
+            os.remove(flag)
+            log("record: captcha gone, recording resumed")
+            interval, prev = 0.7, None
+        time.sleep(max(0.1, interval - (time.time() - t0)))
+
+
+def worker(mode, owner, fin, fout, flag):
+    global OWNER
+    import signal
+    signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))   # 让 finally 删掉 flag 并记下退出
+    OWNER = int(owner)
+    t0 = time.time()
+    pick_display()
+    log("worker start mode=%s owner=%s py=%s display=%s (%.0f ms)" % (mode, owner, sys.version.split()[0], DISPLAY or "default", (time.time() - t0) * 1000))
+    ses = Session()
+    try:
+        if mode == "record":
+            record_loop(ses, flag, os.environ.get("CAP_IDLE", ""))
+            return
+        rfd = os.open(fin, os.O_RDONLY | os.O_NONBLOCK)
+        out = open(fout, "w")
+        buf = b""
+        while True:
+            r, _, _ = select.select([rfd], [], [], 2.0)
+            if not owner_alive():
+                break
+            if not r:
+                continue
+            chunk = os.read(rfd, 4096)
+            if not chunk:
+                time.sleep(0.2)   # 暂无写端; 主人还活着就继续等
+                continue
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                if line.strip() == b"quit":
+                    return
+                t0 = time.time()
+                try:
+                    d = detect(capture())
+                    if d["kind"] == "none":
+                        st, why = "none", "-"
+                    elif d["kind"] == "locked":
+                        st, why = "fail", "locked: vendor 'too many attempts' dialog on screen"
+                        log("replay: %s" % why)
+                    else:
+                        log("replay: %s captcha detected" % d["kind"])
+                        st, why = ses.solve(d)
+                        log("replay: %s %s" % (st, why))
+                except OwnerGone:
+                    raise
+                except Exception as e:
+                    st, why = "error", type(e).__name__ + ":" + str(e).replace("\n", " ")[:100]
+                    log("replay: error %s" % why)
+                out.write("%s %d %s\n" % (st, int((time.time() - t0) * 1000), why.replace(" ", "_")))
+                out.flush()
+    finally:
+        if flag and os.path.exists(flag):
+            os.remove(flag)
+        log("worker exit mode=%s" % mode)
+
+
+def main(argv):
+    if len(argv) >= 2 and argv[0] == "detect":
+        t0 = time.time()
+        img = load(argv[1])
+        t1 = time.time()
+        d = detect(img)
+        res = {"kind": d["kind"], "load_ms": int((t1 - t0) * 1000)}
+        if d["kind"] == "icon":
+            pts, info = plan_icon(img, d)
+            res.update(pts=pts, info=info, confirm=d.get("confirm"), refresh=d.get("refresh"))
+        elif d["kind"] == "word" and "--ocr" in argv:
+            pts, info = plan_word(img, d)
+            res.update(pts=pts, info=info)
+        res["ms"] = int((time.time() - t1) * 1000)
+        print(json.dumps(res, ensure_ascii=False))
+        return 0
+    if len(argv) >= 6 and argv[0] == "worker":
+        worker(argv[1], argv[2], argv[3], argv[4], argv[5])
+        return 0
+    print("usage: capsolve.py detect IMG [--ocr] | worker replay|record OWNER_PID FIFO_IN FIFO_OUT FLAG", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

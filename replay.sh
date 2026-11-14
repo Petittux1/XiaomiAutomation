@@ -250,10 +250,25 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
 fi
 echo $$ > "$LOCKDIR/owner" 2>/dev/null
 release_lock() { rm -rf "$LOCKDIR" 2>/dev/null; }
-trap 'release_lock' 0
-trap 'release_lock; exit 143' 1 2 15
+# 验证码求解 worker 只活在本次回放里: 退出/被杀都在 trap 里收掉, 不留孤儿进程。
+CAP_PID=
+[ -f "$M/captcha/captcha.sh" ] && . "$M/captcha/captcha.sh"
+trap 'cap_stop 2>/dev/null; release_lock' 0
+trap 'cap_stop 2>/dev/null; release_lock; exit 143' 1 2 15
 
 echo $(date +%m%d-%H%M) REPLAY_START $N K=$K TDEV=$TDEV SW=$SW MX=${MX:-} >> $LOGF
+CAP_LOGF=$LOGF
+if command -v cap_start >/dev/null 2>&1 && cap_start replay; then
+  echo $(date +%m%d-%H%M) CAPTCHA_ON pid=$CAP_PID >> $LOGF
+fi
+# 每个动作注入前 (等待之后) 查一次验证码; 解不出 -> 记日志并以失败收尾, 交给调度器的重试。
+cap_gate() {
+  [ -n "$CAP_PID" ] || return 0
+  cap_check && return 0
+  echo $(date +%m%d-%H%M) REPLAY_FAIL $N captcha_unsolved step=$STEP >> $LOGF
+  echo "ERR captcha unsolved at step $STEP" >&2
+  exit 4
+}
 
 # 跨设备回放缩放 (v0.11.0, 默认关)
 # 录制时 record.sh 把几何写进了 actions.rx 首行的 #RX1 头。这里读回来, 若本 profile
@@ -324,6 +339,7 @@ while IFS= read -r line; do
   if [ "$D" -gt 0 ] 2>/dev/null; then
     sleep_ms "$D"
   fi
+  cap_gate
   case "$REST" in
     tap\ *)
       set -- $REST
@@ -351,6 +367,11 @@ done < "$RX"
 if [ "$STEP" -eq 0 ]; then
   echo "ERR no valid actions in $RX" >&2
   exit 2
+fi
+# 最后一个动作也可能弹出验证码 (例如签到按钮本身): 给它 1.5 s 出现再查一次
+if [ -n "$CAP_PID" ]; then
+  sleep 1.5
+  cap_gate
 fi
 echo $(date +%m%d-%H%M) REPLAY_END $N steps=$STEP >> $LOGF
 echo "REPLAY_DONE $N steps=$STEP"

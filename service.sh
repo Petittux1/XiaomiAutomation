@@ -545,6 +545,7 @@ cleanup_app() {  # $1=包名 $2=profile 名 $3=开关(1/0)
   return 0
 }
 
+# >>> SLOT_SHARED  本块 service.sh 与 webctl.sh 必须逐字一致 (回归第 12 节比对); 两边各自加载, 无共享库
 # HHMM → 当日分钟数 (防前导0八进制坑, 非法值返回0)
 hhmm2m() {
   case "$1" in
@@ -554,6 +555,54 @@ hhmm2m() {
       echo $(( h * 60 + m ));;
     *) echo 0;;
   esac
+}
+
+# 本次命中的是哪一天的班次 (YYYYMMDD); 不在触发窗口内则输出空。
+# $1=定时分钟 $2=当前分钟 $3=今天 $4=昨天 (取不到则空 => 不做跨零点衔接)
+# 跨零点窗口 (23:01 之后的定时, 零点后仍在 60 分钟内) 属于「昨天」那一班, 必须按昨天记账:
+# 否则零点一过 state.txt(昨天) != 今天, 23:xx 已经跑完的任务会在 00:00 被当成没跑再触发一次。
+slot_date() {
+  if [ $2 -ge $1 ] && [ $2 -le $(($1 + 60)) ]; then echo "$3"
+  elif [ $1 -gt 1380 ] && [ $2 -le $(($1 + 60 - 1440)) ] && [ -n "$4" ]; then echo "$4"
+  fi
+}
+
+# 昨天的日期 YT / 星期 YW, 只有零点后第一小时 (跨零点窗口) 用得到; $1=epoch $2=当前分钟。
+# 取「今天零点前一小时」而不是 NOW-86400, 免得夏令时 23 小时那天算成前天。
+# 任何一个取不到/格式不对就两个都清空 = 不衔接 (宁可不补跑, 也不误触发, 也不拿今天的星期顶替)。
+yday_set() {
+  YT=; YW=
+  [ $2 -le 60 ] || return 0
+  YS=$(($1 - $2 * 60 - 3600))
+  YT=$(date -d @$YS +%Y%m%d 2>/dev/null); YW=$(date -d @$YS +%u 2>/dev/null)
+  case "$YT" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;; *) YT=; YW=;; esac
+  case "$YW" in [1-7]) ;; *) YT=; YW=;; esac
+}
+
+# 按定时 $1 (HHMM) 和当前 NOWM/T/YT/YW 选班次: PT=班次日期 (窗口外 = 今天),
+# PW=1 在触发窗口内, PDW=班次的星期 (班次就是今天则空, day_ok 自己取今天)。
+slot_pick() {
+  PT=$(slot_date $(hhmm2m $1) $NOWM $T "$YT")
+  PW=0; PDW=
+  [ -n "$PT" ] && PW=1
+  [ -n "$PT" ] && [ "$PT" != "$T" ] && PDW=$YW
+  PT=${PT:-$T}
+}
+
+# 失败计数 try.txt 按班次记: 内容「班次日期 次数」。$1=文件 $2=班次 -> 该班次的失败次数。
+# 别的班次 / 旧格式 (只有一个数字, 不知道是哪天的) 一律算 0 —— 否则失败满 3 次的任务会被永久挡住。
+try_get() {
+  TG=$(cat "$1" 2>/dev/null)
+  case "$TG" in
+    "$2 "*) TG=${TG#"$2 "}; case "$TG" in ''|*[!0-9]*) echo 0;; *) echo "$TG";; esac;;
+    *) echo 0;;
+  esac
+}
+# <<< SLOT_SHARED
+
+# 该班次失败 +1; $1=文件 $2=班次
+try_bump() {
+  echo "$2 $(( $(try_get "$1" "$2") + 1 ))" > "$1"
 }
 
 # ---------- 前台判定 (链路B 用) ----------
@@ -619,7 +668,8 @@ day_ok() {
   days_shape "$DD" || DD=1234567
   [ -z "$DD" ] && return 0
   [ "$DD" = "0" ] && return 1
-  DW=$(date +%u 2>/dev/null)
+  # $2 = 指定星期 (跨零点窗口要按昨天那一班算); 空则取今天
+  DW=${2:-$(date +%u 2>/dev/null)}
   case "$DW" in 1|2|3|4|5|6|7) ;; *) return 0;; esac
   case "$DD" in *"$DW"*) return 0;; esac
   return 1
@@ -695,6 +745,8 @@ watch_water_preserve_rotation() {
 # $1=目录名 $2=FORCE(1/0)
 run_profile() {
   PN=$1; FORCEF=$2
+  # $3 = 班次日期 (跨零点窗口是昨天); 完成标记记在班次上, 而不是跑完那一刻的日期
+  RUN_T=${3:-$T}
   CDIR=$PFX/$PN
   # 读 profile 配置 (P_ 前缀防与全局冲突)
   P_NAME=; P_TYPE=script; P_PKG=; P_SCHED=; P_ENABLE=; P_CLEANUP=
@@ -715,10 +767,8 @@ run_profile() {
   esac
   [ -z "$P_SCHED" ] && P_SCHED=$SCHED_TIME
   PDONE=0
-  [ -f $CDIR/state.txt ] && [ "$(cat $CDIR/state.txt 2>/dev/null)" = "$T" ] && PDONE=1
-  PCT=0
-  [ -f $CDIR/try.txt ] && PCT=$(cat $CDIR/try.txt 2>/dev/null)
-  PCT=${PCT:-0}
+  [ -f $CDIR/state.txt ] && [ "$(cat $CDIR/state.txt 2>/dev/null)" = "$RUN_T" ] && PDONE=1
+  PCT=$(try_get $CDIR/try.txt $RUN_T)
   # 只有定时写 last.txt; FORCE 手动测试不污染
   [ $FORCEF -eq 0 ] && date +%s > $M/last.txt
   date +%s > $M/cool.txt
@@ -838,15 +888,15 @@ run_profile() {
     fi
   fi
   if [ $RC -eq 0 ]; then
-    [ $FORCEF -eq 0 ] && date +%Y%m%d > $CDIR/state.txt
+    [ $FORCEF -eq 0 ] && echo "$RUN_T" > $CDIR/state.txt
     rm -f $CDIR/try.txt
     echo $(date +%m%d-%H%M) V2_OK P=$PN >> $LOG
   elif [ $RC -eq 9 ] || [ $RC -eq 3 ]; then
     echo $(date +%m%d-%H%M) V2_SKIP$RC P=$PN >> $LOG
   else
-    PCT=$(cat $CDIR/try.txt 2>/dev/null)
-    PCT=${PCT:-0}
-    echo $((PCT+1)) > $CDIR/try.txt
+    try_bump $CDIR/try.txt $RUN_T
+    # rc 4 = 验证码解不出 (replay.sh): 本班次直接封顶, 不再背靠背重试 —— 连续答错会触发厂商「尝试过多」锁
+    [ $RC -eq 4 ] && echo "$RUN_T 3" > $CDIR/try.txt
     echo $(date +%m%d-%H%M) V2_FAIL$RC P=$PN >> $LOG
   fi
   # 任务结束(成功/跳过/失败都执行): 回收目标 app 内存, 让它退出后台。
@@ -1015,6 +1065,7 @@ while true; do
     CT=0
   fi
   NOWM=$(hhmm2m $NOWT)
+  yday_set $NOW $NOWM
 
   # ---- 遍历各 profile 找命中 (FORCE 无条件 / 定时 窗口内&当天未跑&失败<3) ----
   HIT=
@@ -1030,19 +1081,16 @@ while true; do
     PEN=${P_ENABLE:-$SCHED_ENABLE}
     # 执行日闸: P_DAYS 空 = 跟随全局 SCHED_DAYS。FORCE 分支在上面, 故意不走这个闸 ——
     # 手动点「立即运行」本来就是"现在就要跑", 被"今天不在计划里"挡住会像是按钮坏了。
+    # 触发窗口: 到点后60分钟内 (纯看时间; 跨零点衔接, 衔接段按昨天的班次算)
+    slot_pick $PSCHED
+    WINDOW_OK=$PW
     DAY_OK=1
-    day_ok "$P_DAYS" || DAY_OK=0
-    # 触发窗口: 到点后60分钟内 (纯看时间; 跨零点衔接)
-    PSM=$(hhmm2m $PSCHED)
-    WINDOW_OK=0
-    if [ $NOWM -ge $PSM ] && [ $NOWM -le $((PSM + 60)) ]; then WINDOW_OK=1; fi
-    if [ $PSM -gt 1380 ] && [ $NOWM -le $((PSM + 60 - 1440)) ]; then WINDOW_OK=1; fi
-    # DONE/失败: profile 自己的文件
+    day_ok "$P_DAYS" "$PDW" || DAY_OK=0
+    # DONE/失败: profile 自己的文件; 完成与否看的是这一班 (PT), 不是今天
     PDONE=0
-    [ -f $PFX/$PN/state.txt ] && [ "$(cat $PFX/$PN/state.txt 2>/dev/null)" = "$T" ] && PDONE=1
-    PCT=0
-    [ -f $PFX/$PN/try.txt ] && PCT=$(cat $PFX/$PN/try.txt 2>/dev/null)
-    PCT=${PCT:-0}
+    [ -f $PFX/$PN/state.txt ] && [ "$(cat $PFX/$PN/state.txt 2>/dev/null)" = "$PT" ] && PDONE=1
+    # 失败次数只算这一班的, 换了班次自动从 0 起
+    PCT=$(try_get $PFX/$PN/try.txt $PT)
     # FORCE 无条件优先: 指定任务必须立即执行，不能被目录顺序中先命中的定时任务抢走。
     if [ $FORCE -eq 1 ]; then
       FM=0
@@ -1051,6 +1099,7 @@ while true; do
       if [ $FM -eq 1 ]; then
         HIT=$PN
         HITF=1
+        HITT=$PT
         break
       fi
       continue
@@ -1058,12 +1107,13 @@ while true; do
     if [ "$PEN" = "1" ] && [ $DAY_OK -eq 1 ] && [ $WINDOW_OK -eq 1 ] && [ $PDONE -eq 0 ] && [ ${PCT:-0} -lt 3 ]; then
       HIT=$PN
       HITF=0
+      HITT=$PT
       break
     fi
   done
 
   if [ -n "$HIT" ]; then
-    run_profile $HIT ${HITF:-0}
+    run_profile $HIT ${HITF:-0} "$HITT"
     continue
   fi
 
@@ -1073,12 +1123,16 @@ while true; do
     # 这里只 sed 出 P_DAYS 一个键, 不 source 整份 conf —— 它紧挨着 profile 循环,
     # source 进来的 P_PKG/P_TYPE 会把循环里的临时变量污染成工行的值。
     ICDAYS=$(sed -n 's/^P_DAYS=//p' $PFX/icbc/conf 2>/dev/null | head -1)
+    ICSCHED=$(sed -n 's/^P_SCHED=//p' $PFX/icbc/conf 2>/dev/null | head -1)
+    # 与定时同一套班次: icbc 定时在 23:xx 时, 零点后衔接段算昨天那一班, 昨晚浇过就不再浇
+    slot_pick ${ICSCHED:-$SCHED_TIME}
+    ICPT=$PT  # 单独存一份: 解锁里的 pat_enter 也用 PT 这个名字
     WDAY=1
-    day_ok "$ICDAYS" || WDAY=0
+    day_ok "$ICDAYS" "$PDW" || WDAY=0
     IDONE=0
-    [ -f $PFX/icbc/state.txt ] && [ "$(cat $PFX/icbc/state.txt 2>/dev/null)" = "$T" ] && IDONE=1
-    ICT=0
-    [ -f $PFX/icbc/try.txt ] && ICT=$(cat $PFX/icbc/try.txt 2>/dev/null)
+    [ -f $PFX/icbc/state.txt ] && [ "$(cat $PFX/icbc/state.txt 2>/dev/null)" = "$ICPT" ] && IDONE=1
+    # 与定时共用 icbc/try.txt, 同一班次 (ICPT) 合计 3 次封顶; 下一班次自动清零
+    ICT=$(try_get $PFX/icbc/try.txt $ICPT)
     if [ $WDAY -eq 1 ] && [ $IDONE -eq 0 ] && [ ${ICT:-0} -lt 3 ] && [ $COOLOK -eq 1 ]; then
       FG=$(fg_detect)
       [ -f $M/debug.txt ] && echo $(date +%H%M) DBG0 "$FG" >> $LOG
@@ -1102,7 +1156,7 @@ while true; do
           watch_water_preserve_rotation
           RC=$?
           if [ $RC -eq 0 ]; then
-            date +%Y%m%d > $PFX/icbc/state.txt
+            echo "$ICPT" > $PFX/icbc/state.txt
             rm -f $PFX/icbc/try.txt
             echo $(date +%m%d-%H%M) OK P=icbc >> $LOG
           else
@@ -1110,9 +1164,7 @@ while true; do
             if [ $RC -eq 9 ] || [ $RC -eq 3 ]; then
               echo $(date +%m%d-%H%M) SKIP$RC P=icbc >> $LOG
             else
-              ICT=$(cat $PFX/icbc/try.txt 2>/dev/null)
-              ICT=${ICT:-0}
-              echo $((ICT+1)) > $PFX/icbc/try.txt
+              try_bump $PFX/icbc/try.txt $ICPT
               echo $(date +%m%d-%H%M) FAIL$RC P=icbc >> $LOG
             fi
           fi

@@ -1,4 +1,4 @@
-# 澎湃自动化—XiaomiAutomation
+﻿# 澎湃自动化—XiaomiAutomation
 
 [English](README.en.md) · [Français](README.fr.md) · [Русский](README.ru.md)
 
@@ -86,7 +86,7 @@ PIN 刻意**只接受环境变量 `WEBUI_PIN`**，不接受命令行参数，这
 
 ## 安装
 
-1. 从 Releases 下载 `XiaomiAutomation-v0.13.4.zip`。
+1. 从 Releases 下载 `XiaomiAutomation-v0.14.0.zip`。
 2. 在 KernelSU / Magisk 中刷入该 zip。
 3. 重启设备后打开模块 WebUI，按需设置解锁方式和 PIN。
 4. 首次使用录制任务时，填写目标 App 包名；切到该 App 后点击「开始录制」，操作完成后点击「停止录制」。
@@ -181,6 +181,29 @@ WebUI 右上角的下拉可切换中文 / English / Français / Русussian（�
 python3 tools/px.py screen.png 216,778 518,780 746,748
 ```
 
+## 验证码自动求解（v0.14.0）
+
+回放与录制进行中时，模块会自动检测屏幕上的验证码并在本机求解（Termux Python + 纯 numpy/Pillow 图像算法）：
+
+- **图标点选**（小米社区签到等）：题头灰色提示图 × 图中纯色图标旋转匹配，避开诱饵图标，按序点选后按「确认」。
+- **文字点选**（请依次点击【…】，需 ddddocr）：见下方安装。
+- **滑块拼图**：拼图块轮廓 + 缺口阴影/边缘双线索闭环拖拽（未经真机验证）。
+- 厂商「尝试过多」锁定按失败处理；每次验证码最多刷新 2 次、间隔 ≥3.5 s，避免触发风控。
+- 回放中求解失败会记 `REPLAY_FAIL` 并当天不再重试；录制中检测到验证码会暂停录取，验证码期间的触摸不会录进动作文件。
+- 回放/录制结束后求解进程即退出，平时不截屏、不常驻，不耗电。
+- 开关：WebUI 「验证码求解」，或 `sh /data/adb/modules/icbc_daily_water/webctl.sh setcaptcha 0`。
+
+启用**文字点选**需在 Termux（以 Termux 用户身份）安装一次：
+
+```sh
+pkg install python-onnxruntime
+pip install --no-deps ddddocr
+```
+
+不装也能用：图标点选与滑块不依赖 ddddocr，仅文字点选会记「unsupported」并继续。
+
+安全说明：求解器以 root 运行 Termux 的解释器，但会校验解释器与库的属主/写位，并以 `-I -S` 隔离模式运行；请保持 Termux 环境本身可信。
+
 ## 文件说明
 
 | 文件 | 作用 |
@@ -190,6 +213,7 @@ python3 tools/px.py screen.png 216,778 518,780 746,748
 | `water.sh` | 内置工行浇水业务逻辑 |
 | `record.sh` | 触摸事件录制内核 |
 | `replay.sh` | 录制动作回放内核 |
+| `captcha/` | 验证码自动求解（回放/录制期间检测并本地求解，平时零开销） |
 | `webctl.sh` | WebUI root 命令接口 |
 | `webroot/` | KernelSU WebUI 页面、脚本与多语言词典 |
 | `sched.conf` | 默认配置模板（安装后实际配置位于 `/data/adb/icbc_water/`） |
@@ -210,7 +234,7 @@ bash tools/build_zip.sh
 脚本会在仓库父目录生成：
 
 ```text
-XiaomiAutomation-v0.13.4.zip
+XiaomiAutomation-v0.14.0.zip
 ```
 
 ## 许可证

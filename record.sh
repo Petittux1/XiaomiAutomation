@@ -452,9 +452,20 @@ _daemon() {
   echo "$STAY0" > $BASE/rec.stayon 2>/dev/null
   chmod 600 $BASE/rec.stayon 2>/dev/null
   svc power stayon true 2>/dev/null
+  # 验证码: 录制期间起一个 worker 每 ~0.7 s 截屏检测, 发现就建 $CAP_FLAG 并自动求解,
+  # 消失后删标志。worker 与本 daemon 同进程组, stop 的 kill -9 -PGID 会一并带走它。
+  CAP_PID=; CAP_FLAG=$BASE/captcha.on; CAP_PAUSE=0
+  rm -f "$CAP_FLAG" 2>/dev/null
+  [ -f "$M/captcha/captcha.sh" ] && . "$M/captcha/captcha.sh"
+  CAP_LOGF=$M/log.txt
+  if command -v cap_start >/dev/null 2>&1 && cap_start record; then
+    log "CAPTCHA_WATCH on pid=$CAP_PID (验证码出现时暂停录取并自动求解)"
+  else
+    log "CAPTCHA_WATCH off (开关关闭或未找到 Termux Python)"
+  fi
   # 子进程异常退出时也恢复录制前常亮状态；stop 的 kill -9 仍由 stop 兜底。
-  trap 'restore_rec_stayon' 0
-  trap 'restore_rec_stayon; trap - 0; exit 143' 1 2 15
+  trap 'cap_stop 2>/dev/null; restore_rec_stayon' 0
+  trap 'cap_stop 2>/dev/null; restore_rec_stayon; trap - 0; exit 143' 1 2 15
   T0=$(now_ms)
   TSTART=$(date +%s)
   ACTIVE=0; STARTED=0
@@ -565,7 +576,34 @@ _daemon() {
       fi
       # 检查完成后再记时间；dumpsys 较慢时不会让下一行立即重复检查。
       LASTCHK=$(now_ms)
+      # 录制暂停 (锁屏/暗屏/不在目标 app/还在等 app) 时让验证码 worker 退避到 3 s 一次; 只在状态变化时写盘
+      CAP_IDLE_N=0
+      { [ "$PAUSED" = "1" ] || [ "$READY" = "0" ] || [ "$APP_PAUSE" = "1" ]; } && CAP_IDLE_N=1
+      if [ -n "$CAP_PID" ] && [ "$CAP_IDLE_N" != "${CAP_IDLE:-0}" ]; then
+        CAP_IDLE=$CAP_IDLE_N
+        if [ "$CAP_IDLE" = "1" ]; then : > "$BASE/captcha.idle"; else rm -f "$BASE/captcha.idle"; fi
+      fi
     fi
+    # 验证码在屏 (worker 建的标志): 暂停录取。按下发生在标志存在期间的手势一律不录
+    # (含 worker 自己的 input 注入 —— 它走 InputManager 不经 $TDEV, 这里再兜一层);
+    # 标志出现前已按下的手势照常收尾。(CAPGATE 段由回归第 13 节抠出来模拟)
+    # ---- CAPGATE_BEGIN ----
+    # worker 被系统杀掉 (如 OOM) 时来不及删标志, 不能让录制永远停在暂停
+    if [ -f "$CAP_FLAG" ] && [ -n "$CAP_PID" ] && ! kill -0 "$CAP_PID" 2>/dev/null; then
+      rm -f "$CAP_FLAG"
+      log "CAPTCHA worker 已退出, 清掉残留标志"
+    fi
+    if [ -f "$CAP_FLAG" ]; then
+      if [ "$CAP_PAUSE" = "0" ]; then
+        CAP_PAUSE=1
+        log "PAUSE 验证码 (自动求解中, 期间新手势不录)"
+      fi
+    elif [ "$CAP_PAUSE" = "1" ]; then
+      CAP_PAUSE=0
+      log "RESUME 验证码已消失, 继续录取"
+    fi
+    [ "$CAP_PAUSE" = "1" ] && [ $ACTIVE -eq 0 ] && continue
+    # ---- CAPGATE_END ----
     [ "$PAUSED" = "1" ] && continue
     [ "$READY" = "0" ] && continue
     [ "$APP_PAUSE" = "1" ] && continue
@@ -663,6 +701,7 @@ _daemon() {
   fi
   log "DAEMON end"
   # 正常退出时由 EXIT trap 收尾; 若 getevent 自行结束, 也恢复常亮状态
+  cap_stop 2>/dev/null
   restore_rec_stayon
 }
 
@@ -708,6 +747,8 @@ stop() {
   fi
   # 兜底: 按命令行杀掉管道子壳/getevent (读取端消失后 getevent 会 SIGPIPE 自灭)
   pkill -9 -f "record.sh _daemon $N" 2>/dev/null
+  # 验证码 worker 随进程组一起被杀, 来不及删自己的标志; 它若漏网也会在 0.7 s 内发现主人已死自行退出
+  rm -f "$BASE/captcha.on" "$BASE/captcha.idle" 2>/dev/null
   sleep 0.6
   # 恢复录制前屏幕常亮状态
   restore_rec_stayon

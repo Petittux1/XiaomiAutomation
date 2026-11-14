@@ -22,7 +22,7 @@ trap 'rm -rf "$STAGE"' EXIT HUP INT TERM
 CACHE_TAG="v${VC}"
 
 rm -f "$OUT"
-mkdir -p "$STAGE/tools" "$STAGE/webroot"
+mkdir -p "$STAGE/tools" "$STAGE/webroot" "$STAGE/captcha/shim"
 cp "$ROOT"/module.prop "$ROOT"/service.sh "$ROOT"/water.sh "$ROOT"/record.sh "$ROOT"/replay.sh \
    "$ROOT"/webctl.sh "$ROOT"/sched.conf "$ROOT"/device.conf "$ROOT"/customize.sh \
    "$ROOT"/config.json \
@@ -30,6 +30,8 @@ cp "$ROOT"/module.prop "$ROOT"/service.sh "$ROOT"/water.sh "$ROOT"/record.sh "$R
    "$ROOT"/LICENSE "$ROOT"/.gitignore "$STAGE/"
 cp "$ROOT"/webroot/* "$STAGE/webroot/"
 cp "$ROOT"/tools/px.py "$ROOT"/tools/run_once.sh "$STAGE/tools/"
+cp "$ROOT"/captcha/capsolve.py "$ROOT"/captcha/captcha.sh "$STAGE/captcha/"
+cp "$ROOT"/captcha/shim/cv2.py "$STAGE/captcha/shim/"
 
 # ---------- WebUI 资源带版本号 ----------
 # 模块升级后 KSU WebView 经常命中旧的 app.js / i18n.js, 表现就是「WebUI 没更新」。
@@ -109,7 +111,12 @@ chmod 755 "$STAGE"/service.sh "$STAGE"/water.sh "$STAGE"/record.sh "$STAGE"/repl
 chmod 644 "$STAGE"/module.prop "$STAGE"/sched.conf "$STAGE"/device.conf \
   "$STAGE"/README.md "$STAGE"/README.en.md "$STAGE"/README.fr.md "$STAGE"/README.ru.md \
   "$STAGE"/LICENSE \
-  "$STAGE"/.gitignore "$STAGE"/tools/px.py "$STAGE"/webroot/*
+  "$STAGE"/.gitignore "$STAGE"/tools/px.py "$STAGE"/webroot/* \
+  "$STAGE"/captcha/capsolve.py "$STAGE"/captcha/captcha.sh "$STAGE"/captcha/shim/cv2.py
+
+# 仓库在 Windows 上检出为 CRLF; 模块脚本必须 LF, 否则安装器 (/system/bin sh) 直接语法错误。
+# 在暂存目录统一去掉 \r (全部是文本文件, 无二进制)。
+find "$STAGE" -type f -exec sh -c 'tr -d "\r" < "$1" > "$1.lf" && mv "$1.lf" "$1"' _ {} \;
 
 (cd "$STAGE" && zip -qr "$OUT" .)
 
@@ -118,7 +125,8 @@ chmod 644 "$STAGE"/module.prop "$STAGE"/sched.conf "$STAGE"/device.conf \
 for f in module.prop service.sh water.sh record.sh replay.sh webctl.sh \
          sched.conf device.conf customize.sh config.json \
          README.md README.en.md README.fr.md README.ru.md \
-         webroot/index.html webroot/app.js webroot/i18n.js webroot/kernelsu.js; do
+         webroot/index.html webroot/app.js webroot/i18n.js webroot/kernelsu.js \
+         captcha/capsolve.py captcha/captcha.sh captcha/shim/cv2.py; do
   unzip -l "$OUT" | grep -qF " $f" || { echo "构建失败: 产物缺少 $f" >&2; exit 1; }
 done
 # 设备档案模板必须是「不覆盖」状态: 装了包的新用户不该一上来就被别的机型参数接管。
@@ -133,8 +141,8 @@ BRAND_CN='澎湃自动化—XiaomiAutomation'
 BRAND_EN='XiaomiAutomation'
 # WebUI 标题用短形式: 17 Pro 只有约 348dp 宽, 而 h1 是 nowrap + ellipsis,
 # 完整品牌名再加机型放不下会被截成省略号。短形式已经把品牌和机型都带上了。
-TITLE_CN="💧 澎湃自动化 · Xiaomi 17 Pro"
-TITLE_EN="💧 $BRAND_EN · Xiaomi 17 Pro"
+TITLE_CN="澎湃自动化 · Xiaomi 17 Pro"
+TITLE_EN="$BRAND_EN · Xiaomi 17 Pro"
 NAME=$(sed -n 's/^name=//p' "$STAGE/module.prop")
 [ "$NAME" = "$BRAND_CN" ] || {
   echo "构建失败: module.prop 的 name 应为 '$BRAND_CN', 实际 '$NAME'" >&2; exit 1; }

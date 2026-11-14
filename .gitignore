@@ -10,3 +10,5 @@ try.txt
 debug.txt
 lock/
 __pycache__/
+.agent/
+tools/webui_preview/

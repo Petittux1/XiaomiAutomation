@@ -891,6 +891,201 @@ else
 fi
 
 
+# ============ 12. 跨零点窗口按昨天的班次记账 ============
+# 真机反馈: 所有任务都排在 23:xx, 模块却在 00:00 又跑了一遍。根因: 23:01 之后的定时
+# 有一段「跨零点衔接」窗口 (零点后 60 分钟内仍算到点), 但完成标记 state.txt 拿去比的是
+# 「今天」—— 零点一过, 昨晚 23:xx 写下的昨天日期 != 今天, 已跑完的任务被当成没跑再触发。
+# 这里把 service.sh 里真正的 SLOT_SHARED 块和 day_ok 抠出来跑, 按主循环的判定方式模拟。
+sec "12. 跨零点窗口不在 00:00 重跑 23:xx 任务"
+
+BLK_S=$(sed -n '/^# >>> SLOT_SHARED/,/^# <<< SLOT_SHARED/p' service.sh)
+BLK_W=$(sed -n '/^# >>> SLOT_SHARED/,/^# <<< SLOT_SHARED/p' webctl.sh)
+FN="$BLK_S
+$(sed -n '/^days_shape() {/,/^}/p; /^day_ok() {/,/^}/p; /^try_bump() {/,/^}/p' service.sh)"
+if ! printf '%s\n' "$BLK_S" | grep -q '^slot_pick()'; then
+  fail "service.sh 缺 SLOT_SHARED 块 (slot_date/yday_set/slot_pick) —— 跨零点窗口没有按班次日期记账"
+else
+  eval "$FN"
+  # due 定时HHMM 现在HHMM 今天 昨天 昨天星期 state.txt [P_DAYS 今天星期] -> "due 班次" 或 "no"
+  # 与主循环同一判定: slot_pick -> 窗口 + day_ok(班次星期) + DONE(比班次日期)。
+  # date 被桩掉, day_ok 回落取「今天星期」时拿到第 8 个参数, 不依赖跑测试的那一天。
+  due() (
+    TODAY_WD=${8:-1}; date() { echo "$TODAY_WD"; }
+    NOWM=$(hhmm2m $2); T=$3; YT=$4; YW=$5; SCHED_DAYS=1234567
+    slot_pick $1
+    if [ $PW -eq 1 ] && day_ok "$7" "$PDW" && [ "$PT" != "$6" ]; then echo "due $PT"; else echo no; fi
+  )
+  chk() { [ "$1" = "$2" ] && ok "$3" || fail "$3 (得到 '$1', 应为 '$2')"; }
+  chk "$(due 2330 0000 20261115 20261114 6 20261114)" "no"             "23:30 昨晚已跑, 00:00 不再触发"
+  chk "$(due 2359 0030 20261115 20261114 6 20261114)" "no"             "23:59 昨晚已跑, 00:30 不再触发"
+  chk "$(due 2330 0015 20261115 20261114 6 20261113)" "due 20261114"   "23:30 昨晚漏跑, 00:15 补跑且记在昨天"
+  chk "$(due 2330 2330 20261115 ''       '' 20261114)" "due 20261115"  "零点补跑记在昨天, 不挡今晚 23:30"
+  chk "$(due 2330 0031 20261115 20261114 6 20261113)" "no"             "00:31 已出 23:30 的窗口"
+  chk "$(due 2300 0000 20261115 20261114 6 20261113)" "no"             "23:00 没有跨零点窗口"
+  chk "$(due 2330 0000 20261115 ''       '' 20261113)" "no"            "取不到昨天日期时不衔接"
+  chk "$(due 0809 0809 20261115 ''       '' 20261114)" "due 20261115"  "08:09 前导零不按八进制算"
+  # 执行日掩码: 衔接段必须按「班次那天」的星期判, 不是零点后的今天
+  chk "$(due 2330 0015 20261114 20261113 5 20261112 12345 6)" "due 20261113" "周五 23:30 (工作日) 漏跑, 周六 00:15 照常补跑"
+  chk "$(due 2330 0015 20261116 20261115 7 20261114 12345 1)" "no"           "周日 23:30 不在工作日, 周一 00:15 不补跑"
+  chk "$(due 2330 2330 20261114 ''       '' 20261113 12345 6)" "no"          "周六当晚 23:30 不在工作日, 不跑"
+  chk "$(due 2330 2330 20261113 ''       '' 20261112 12345 5)" "due 20261113" "周五当晚 23:30 在工作日, 照跑"
+  # yday_set: 昨天的日期和星期要么都合法, 要么都空 (date 被桩成各种返回)
+  yd() ( D=$1; W=$2; date() { case "$*" in *%u*) echo "$W";; *) echo "$D";; esac; }; yday_set 1700000000 $3; echo "[$YT][$YW]" )
+  chk "$(yd 20261114 6 15)" "[20261114][6]" "yday_set 零点后取到昨天日期和星期"
+  chk "$(yd 20261114 X 15)" "[][]"          "yday_set 星期不合法时两个都清空 (不拿今天顶替)"
+  chk "$(yd 'bad date' 6 15)" "[][]"        "yday_set 日期不合法时两个都清空"
+  chk "$(yd 20261114 6 61)" "[][]"          "yday_set 零点一小时之后不取昨天"
+  # 失败计数按班次: 真机上 icbc try=4 / demo try=3 (旧格式, 只有数字) 被永久挡住
+  TF=$(mktemp 2>/dev/null || echo /tmp/try_reg.$$)
+  printf '4\n' > "$TF"
+  chk "$(try_get "$TF" 20261114)" "0" "旧格式 try.txt (只有次数) 不再永久挡住"
+  printf '20261113 3\n' > "$TF"
+  chk "$(try_get "$TF" 20261114)" "0" "昨天失败满 3 次, 今天的班次重新放行"
+  chk "$(try_get "$TF" 20261113)" "3" "昨天那一班仍记得 3 次"
+  rm -f "$TF"
+  try_bump "$TF" 20261114; try_bump "$TF" 20261114
+  chk "$(try_get "$TF" 20261114)" "2" "同一班次失败累加 (定时与链路B 共用一个计数)"
+  try_bump "$TF" 20261114
+  N3=$(try_get "$TF" 20261114)
+  [ "$N3" -ge 3 ] && ok "同一班次第 3 次失败后封顶 (主循环 PCT<3 不再放行)" \
+    || fail "同一班次 3 次失败后计数为 $N3, 封顶失效"
+  chk "$(cat "$TF")" "20261114 3" "try.txt 写成「班次 次数」"
+  try_bump "$TF" 20261115
+  chk "$(cat "$TF")" "20261115 1" "新班次第一次失败从 1 起, 不接着昨天数"
+  printf '20261114 x\n' > "$TF"
+  chk "$(try_get "$TF" 20261114)" "0" "次数不是数字时按 0, 不让 [ -lt ] 报错"
+  rm -f "$TF"
+fi
+# 四处 (主循环读 / run_profile 读+写 / 链路B 读+写) 都走 try_get/try_bump, 不再裸读 try.txt
+n=$(grep -cE 'cat \$(CDIR|PFX/\$PN|PFX/icbc)/try\.txt' service.sh || true)
+[ "${n:-0}" = "0" ] && ok "service.sh 不再裸读 profile 的 try.txt" || fail "service.sh 还有 $n 处裸读 profile try.txt"
+n=$(grep -cE 'try_(get|bump) \$(CDIR|PFX/\$PN|PFX/icbc)/try\.txt \$(PT|RUN_T|ICPT)\b' service.sh || true)
+[ "${n:-0}" = "5" ] && ok "service.sh 五处 try 读写都按班次" || fail "service.sh 按班次的 try 读写有 ${n:-0} 处, 应为 5"
+n=$(grep -cE 'try_get \$(CD|PFX/icbc)/try\.txt \$PT\)' webctl.sh || true)
+[ "${n:-0}" = "2" ] && ok "webctl 两处失败次数显示按班次" || fail "webctl 按班次显示失败次数的只有 ${n:-0} 处"
+# webctl.sh 的状态显示必须用同一份班次逻辑, 否则 WebUI 在零点后又显示「今天未完成」
+if [ -n "$BLK_W" ] && [ "$BLK_S" = "$BLK_W" ]; then
+  ok "webctl.sh 的 SLOT_SHARED 块与 service.sh 逐字一致"
+else
+  fail "webctl.sh 的 SLOT_SHARED 块缺失或与 service.sh 不一致 —— 分头改必然漏一家"
+fi
+n=$(grep -c 'state.txt 2>/dev/null)" = "$PT"' webctl.sh || true)
+[ "${n:-0}" = "2" ] && ok "webctl 两处完成判定 (profile 行 / 状态页) 都比班次 PT" \
+  || fail "webctl 完成判定比 \$PT 的只有 ${n:-0} 处, 应为 2"
+# 链路B (打开工行自动浇水) 也按班次记账
+grep -qF 'icbc/state.txt 2>/dev/null)" = "$ICPT" ] && IDONE=1' service.sh && grep -qF 'echo "$ICPT" > $PFX/icbc/state.txt' service.sh \
+  && ok "链路B 完成判定与写入都用班次 PT" || fail "链路B 仍按日历日判定/写入 icbc state.txt"
+# 主循环和 run_profile 必须都用班次日期, 少一处就又会错位
+grep -qF '= "$PT" ] && PDONE=1' service.sh && ok "主循环 DONE 判定看班次 PT" \
+  || fail "主循环 DONE 判定没用班次日期 PT"
+grep -qF 'echo "$RUN_T" > $CDIR/state.txt' service.sh && ok "run_profile 完成标记写班次日期" \
+  || fail "run_profile 完成标记不是班次日期 (跨零点跑完会写成今天, 挡掉今晚)"
+grep -qF 'date +%Y%m%d > $CDIR/state.txt' service.sh \
+  && fail "run_profile 仍按跑完时刻写 state.txt" || ok "run_profile 不再按跑完时刻写 state.txt"
+
+
+# ============ 13. 验证码: 录制排除 + 回放失败收尾 + worker 一问一答 ============
+# 图像识别本身由 tools/test_captcha.py 测 (Python); 这里只测 shell 侧:
+#   a) 录制: 验证码标志存在期间「按下」的手势一律不录, 标志出现前按下的照常收尾
+#   b) 回放: 解不出时以退出码 4 失败并写 REPLAY_FAIL, 不再注入下一步
+#   c) captcha.sh: 经 FIFO 一问一答, none/solved 继续, fail 返回 1, cap_stop 不留进程与 FIFO
+sec "13. 验证码求解的 shell 侧逻辑"
+CT=$(mktemp -d 2>/dev/null || { mkdir -p "/tmp/capt.$$" && echo "/tmp/capt.$$"; })
+GATE=$(sed -n '/# ---- CAPGATE_BEGIN ----/,/# ---- CAPGATE_END ----/p' record.sh)
+if [ -z "$GATE" ]; then
+  fail "record.sh 缺 CAPGATE 段 —— 录制时验证码期间的手势不会被排除"
+else
+  CAP_FLAG=$CT/captcha.on
+  # sim 事件...: on/off = worker 建/删标志; dX = 手势 X 按下; u = 抬起。输出被录下的手势
+  sim() (
+    log() { :; }
+    CAP_PAUSE=0; ACTIVE=0; G=; OUT=
+    rm -f "$CAP_FLAG"
+    for ev in "$@"; do
+      case "$ev" in on) : > "$CAP_FLAG"; continue;; off) rm -f "$CAP_FLAG"; continue;; esac
+      eval "$GATE"
+      case "$ev" in
+        d*) ACTIVE=1; G=${ev#d};;
+        u) [ $ACTIVE -eq 1 ] && OUT="$OUT$G"; ACTIVE=0;;
+      esac
+    done
+    echo "[$OUT]"
+  )
+  chk13() { [ "$1" = "$2" ] && ok "$3" || fail "$3 (得到 $1, 应为 $2)"; }
+  chk13 "$(sim dA u on dB u dC u off dD u)" "[AD]" "验证码期间按下的 B/C 不录, 前后的 A/D 照录"
+  chk13 "$(sim dA on u off)"                "[A]"  "标志出现前已按下的手势照常收尾"
+  chk13 "$(sim on dA off u dB u)"           "[B]"  "标志期间按下、消失后才抬起的手势也不录"
+  sh -c 'exit 0' & wait $!; DEADPID=$!
+  chk13 "$(CAP_PID=$DEADPID sim on dA u)"    "[A]"  "worker 已死时清掉残留标志, 录制不会永远暂停"
+  chk13 "$(CAP_PID=$$ sim on dA u)"          "[]"   "worker 活着时标志照常生效"
+fi
+grep -qF 'rm -f "$BASE/captcha.on"' record.sh && ok "stop 清掉 worker 来不及删的标志" \
+  || fail "record.sh stop 没清验证码标志 (kill -9 后标志残留, 下次录制一开始就暂停)"
+
+FN=$(sed -n '/^cap_gate() {/,/^}/p' replay.sh)
+if [ -z "$FN" ]; then
+  fail "replay.sh 缺 cap_gate"
+else
+  ( eval "$FN"; CAP_PID=1; cap_check() { return 1; }; N=demo; STEP=3; LOGF=$CT/rlog; cap_gate; echo reached ) > "$CT/r.out" 2>&1
+  RC=$?
+  if [ "$RC" = "4" ] && grep -q 'REPLAY_FAIL demo captcha_unsolved step=3' "$CT/rlog" && ! grep -q reached "$CT/r.out"; then
+    ok "回放遇到解不出的验证码: 退出码 4 + REPLAY_FAIL, 不再继续注入"
+  else
+    fail "cap_gate 失败收尾不对 (rc=$RC, $(cat "$CT/rlog" 2>/dev/null))"
+  fi
+  ( eval "$FN"; CAP_PID=; cap_check() { exit 9; }; cap_gate; echo passed ) > "$CT/r2.out" 2>&1
+  grep -q passed "$CT/r2.out" && ok "未启用求解器时 cap_gate 直接放行" || fail "未启用求解器时 cap_gate 没放行"
+fi
+grep -qF "trap 'cap_stop 2>/dev/null; release_lock' 0" replay.sh && ok "回放退出 trap 收掉 worker" \
+  || fail "replay.sh 退出时不收 worker (会留下孤儿 Python)"
+
+if command -v mkfifo >/dev/null 2>&1 && mkfifo "$CT/probe" 2>/dev/null; then
+  if [ ! -d /data/data/com.termux ]; then
+    ok "(无 Termux, 跳过 FIFO 一问一答: cap_trust 在 PC 上必然拒绝)"
+  else
+  mkdir -p "$CT/m/captcha"; : > "$CT/m/captcha/capsolve.py"
+  cat > "$CT/fakepy" <<'EOF'
+#!/bin/sh
+# 假 worker: 参数同 capsolve.py worker replay OWNER IN OUT FLAG; 依次回三种结果
+exec 3<"$5" 4>"$6"
+for r in "none 120 -" "solved 900 icon_(attempt_1)" "fail 30000 unsolved:icon"; do
+  read -r l <&3; echo "$r" >&4
+done
+sleep 30
+EOF
+  chmod +x "$CT/fakepy"
+  (
+    M=$CT/m; BASE=$CT
+    . ./captcha/captcha.sh
+    CAP_PY=$CT/fakepy; CAP_LOGF=$CT/caplog
+    cap_start replay || echo nostart
+    cap_check; echo "rc1=$?"; cap_check; echo "rc2=$?"; cap_check; echo "rc3=$?"
+    P=$CAP_PID; cap_stop; sleep 0.3
+    kill -0 "$P" 2>/dev/null && echo alive || echo dead
+    echo "fifos=$(ls "$BASE"/cap.in.* "$BASE"/cap.out.* 2>/dev/null | wc -l | tr -d ' ')"
+  ) > "$CT/c.out" 2>&1
+  C=$(tr '\n' ' ' < "$CT/c.out")
+  case "$C" in
+    *"rc1=0 rc2=0 rc3=1 dead fifos=0"*) ok "FIFO 一问一答: none/solved 放行, fail 返回 1, 停止后无进程无 FIFO";;
+    *) fail "captcha.sh 一问一答不对: $C";;
+  esac
+  grep -q 'CAPTCHA solved' "$CT/caplog" && grep -q 'CAPTCHA_FAIL fail' "$CT/caplog" \
+    && ok "求解结果写进模块日志" || fail "求解结果没写进日志: $(cat "$CT/caplog" 2>/dev/null)"
+  (
+    M=$CT/m; BASE=$CT
+    printf 'CAPTCHA_SOLVE=0\n' > "$CT/sched.conf"
+    . ./captcha/captcha.sh
+    CAP_PY=$CT/fakepy
+    cap_start replay && echo started || echo off
+  ) > "$CT/d.out" 2>&1
+  grep -q '^off$' "$CT/d.out" && ok "CAPTCHA_SOLVE=0 时不启动 worker" || fail "关掉开关后仍启动 worker"
+  fi
+else
+  ok "(本机无 mkfifo, 跳过 FIFO 一问一答)"
+fi
+rm -rf "$CT"
+
+
 # ============ 汇总 ============
 printf '\n'
 if [ "$FAILS" = "0" ]; then
