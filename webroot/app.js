@@ -387,13 +387,18 @@ async function pollRec() {
     loadProfiles(); loadLog();
     return;
   }
-  // 目标 app 一直没识别到: 提示一次 (防长期 READY=0 白录)
-  if (!window._recWarned && out.indexOf('READY') === -1) {
+  // 目标 app 一直没识别到: 等 READY 翻 1 之后就不再提示; 前两次轮询(约 6 s)给用户切到目标 app 的时间
+  if (!window._recWarned && out.indexOf('ready=0') !== -1) {
     const m = out.match(/\bname=(\S+)/);
     if (m) {
-      window._recWarned = 1;
-      toastMsg(t('toast.recNoApp'));
+      window._recWarnPolls = (window._recWarnPolls || 0) + 1;
+      if (window._recWarnPolls >= 2) {
+        window._recWarned = 1;
+        toastMsg(t('toast.recNoApp'));
+      }
     }
+  } else if (out.indexOf('ready=1') !== -1) {
+    window._recWarned = 1;   // 已识别到 app, 不再提示
   }
 }
 
@@ -684,6 +689,7 @@ async function onProfAct(e, evType) {
         const r = await run('record start ' + slug);
         if (isErr(r)) { errToast(r); return; }
         window._recWarned = 0;
+        window._recWarnPolls = 0;
         toastMsg(t('toast.recStart'));
         btn.textContent = t('btn.recStop');
         btn.dataset.state = 'recording';

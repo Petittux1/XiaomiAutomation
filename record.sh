@@ -400,6 +400,7 @@ start() {
   command -v setsid >/dev/null 2>&1 || { echo "ERR start failed: PATH 里没有 setsid"; exit 1; }
   command -v getevent >/dev/null 2>&1 || { echo "ERR start failed: PATH 里没有 getevent"; exit 1; }
   rm -f $TMP
+  rm -f "$BASE"/rec.evt.fifo.* 2>/dev/null   # 上次 daemon 被 kill -9 可能留下的事件 FIFO
   # 后台 daemon (setsid 脱离, 退出终端不影响; daemon 自写 pid 到 $PIDF)
   # [ -f ] 先判再读: 全新安装还没有 rec.log, 直接 `wc -l < $LOG` 会由 shell 抢在
   # 2>/dev/null 生效之前往 stderr 漏一句 "cannot open ... rec.log"。
@@ -479,9 +480,11 @@ _daemon() {
   if [ -n "$PKG" ]; then
     APPAWARE=1
     LAST_FG=$(fg_pkg)
-    if [ "$LAST_FG" = "$PKG" ]; then READY=1; log "READY 目标app已在前台, 开始录取"; fi
+    if [ "$LAST_FG" = "$PKG" ]; then
+      READY=1; echo 1 > "$BASE/rec.ready"; log "READY 目标app已在前台, 开始录取"
+    fi
   else
-    READY=1; log "READY 未设目标app, 亮屏即录"   # 未设 PKG = 亮屏即开录 (任意 app)
+    READY=1; echo 1 > "$BASE/rec.ready"; log "READY 未设目标app, 亮屏即录"   # 未设 PKG = 亮屏即开录 (任意 app)
   fi
   : > $TMP
   # 写入录制几何头 #RX1, 供跨设备回放按比例换算坐标。
@@ -500,89 +503,124 @@ _daemon() {
     printf '#RX1 SW=%s SH=%s K=%s\n' "$SW" "$SH" "$K" >> $TMP
   fi
   CNT=0
-  LASTCHK=0
-  getevent -t $TDEV 2>/dev/null | while IFS= read -r line; do
+  LASTCHK_S=0
+  # 空闲 tick 的时间戳必须用秒 (date +%s, 10 位): 这台设备的 sh 是 32 位,
+  # now_ms 的 13 位毫秒值在 $(( )) 里溢出成负数, 用它做节流会让 tick 永不触发。
+  LASTTICK=$(date +%s)
+  # 状态/前台复查: 事件流忙时按行触发, 空闲时由 read -t tick 每秒触发一次。
+  # 抽成函数是因为旧版只在 getevent 事件里复查 —— 用户切到目标 app 后手指一停,
+  # 事件流就静默, READY 永远翻不过来, 表现为「没识别到 app / 录不到任何动作」。
+  rec_check() {
+    NS=$(istate)
+    if [ "$NS" -ne "$PAUSED" ]; then
+      if [ "$NS" -eq 1 ]; then
+        if [ $ACTIVE -eq 1 ]; then
+          ACTIVE=0; STARTED=0
+          log "PAUSE_TRUNC 放弃未完成手势 $SX,$SY"
+        fi
+        log "PAUSE 锁屏/暗屏"
+      else
+        T0=$(now_ms)
+        log "RESUME 亮屏解锁"
+      fi
+      PAUSED=$NS
+    fi
+    if [ $APPAWARE -eq 1 ]; then
+      FP=$(fg_pkg)
+      LAST_FG=$FP
+      if [ "$READY" = "0" ]; then
+        # 诊断: 每20次检查(~6s)打一次前台返回值, 定位"识别不到app"
+        FGW=$((FGW+1))
+        if [ $((FGW % 20)) -eq 1 ]; then
+          log "FGWAIT 前台=<${FP}> 目标=<${PKG}> 等待目标app到前台"
+        fi
+        # 非空 P_PKG 必须等目标 App；不能因前台解析暂时失败就偷偷改成全量裸录。
+        # 这里只给出可见提示，状态仍保持等待，避免录到桌面/其它 App。
+        if [ $(( $(date +%s) - TSTART )) -ge 45 ] && [ $((FGW % 20)) -eq 1 ]; then
+          log "WAIT_APP 45s仍未识别目标app($PKG), 继续等待，不降级裸录"
+        fi
+      fi
+      case "$FP" in
+        "$PKG")
+          # 目标app在前台
+          MISS=0
+          if [ "$READY" = "0" ]; then
+            READY=1
+            T0=$(now_ms)
+            echo 1 > "$BASE/rec.ready"
+            log "READY 目标app已到前台, 开始录取"
+          elif [ "$APP_PAUSE" = "1" ]; then
+            APP_PAUSE=0
+            T0=$(now_ms)
+            log "RESUME 回到目标app, 继续录取"
+          fi
+          ;;
+        permissioncontroller|com.android.permissioncontroller|com.android.systemui|com.android.settings)
+          # 权限弹窗/系统UI覆盖: 仍算目标app操作会话, 不停录不截断
+          MISS=0
+          ;;
+        *)
+          # 空结果或其它包不能证明仍在目标app；连续N次确认才真暂停。
+          # 手势进行中不掐断，等抬手由 put_gesture 精确复查裁决。
+          MISS=$((MISS+1))
+          if [ "$READY" = "1" ] && [ "$APP_PAUSE" = "0" ] && [ $MISS -ge 3 ]; then
+            if [ $ACTIVE -eq 1 ]; then
+              log "PEND_QUIT 离开确认中但手势未完成, 等抬手裁决 起点$SX,$SY"
+            else
+              APP_PAUSE=1
+              log "PAUSE 离开目标app (连续$MISS次确认)"
+            fi
+            MISS=0
+          fi
+          ;;
+      esac
+    fi
+    # 检查完成后再记时间；dumpsys 较慢时不会让下一行立即重复检查。
+    # 录制暂停 (锁屏/暗屏/不在目标 app/还在等 app) 时让验证码 worker 退避到 3 s 一次; 只在状态变化时写盘
+    CAP_IDLE_N=0
+    { [ "$PAUSED" = "1" ] || [ "$READY" = "0" ] || [ "$APP_PAUSE" = "1" ]; } && CAP_IDLE_N=1
+    if [ -n "$CAP_PID" ] && [ "$CAP_IDLE_N" != "${CAP_IDLE:-0}" ]; then
+      CAP_IDLE=$CAP_IDLE_N
+      if [ "$CAP_IDLE" = "1" ]; then : > "$BASE/captcha.idle"; else rm -f "$BASE/captcha.idle"; fi
+    fi
+  }
+  # 事件源改走 FIFO + read -t: 有事件立即处理, 无事件每秒 tick 一次复查前台。
+  # 快速边缘滑动可能只有几十行, 频繁 dumpsys 会把 getevent 消费拖慢; 行数条件
+  # 只兜住密集事件, 空闲场景统一交给 tick (>=900ms 才复查, 不额外增加 dumpsys 频率)。
+  EVFIFO=$BASE/rec.evt.fifo.$$
+  rm -f "$EVFIFO"
+  mkfifo "$EVFIFO" 2>/dev/null || { log "FATAL mkfifo 不可用, 无法建立事件管道"; exit 1; }
+  getevent -t $TDEV > "$EVFIFO" 2>/dev/null &
+  GEV_PID=$!
+  exec 9< "$EVFIFO"
+  rm -f "$EVFIFO"   # 路径即删: 读写两端靠已打开的 fd 继续通信, 退出自动回收
+  while :; do
+    # mksh read -t: 有数据=0; 超时=142; EOF=1
+    IFS= read -r -t 1 line <&9
+    RC=$?
+    if [ "$RC" -eq 1 ]; then
+      break   # getevent 结束
+    fi
+    if [ "$RC" -eq 142 ]; then
+      # 空闲 tick: 手指一停事件流就静默, 这里每秒复查一次屏幕/前台,
+      # 让「切到目标 app 后停手」也能翻转 READY, 并即时撤销验证码 worker 的 idle。
+      NOW_S=$(date +%s)
+      if [ $(( NOW_S - LASTTICK )) -ge 1 ]; then
+        LASTTICK=$NOW_S
+        rec_check
+      fi
+      continue
+    fi
     CNT=$((CNT+1))
     # 原始事件采样: 前6行打日志, 便于核对 getevent 真实输出格式
     if [ $CNT -le 6 ]; then
       log "RAW$CNT $line"
     fi
-    # 状态/前台检查: 首行立即确认，之后按时间且每12行最多一次。
-    # 不用“每6行”硬触发；快速边缘滑动可能只有几十行，频繁 dumpsys
-    # 会把 getevent 消费拖慢，反而漏掉返回手势。
-    if [ "$CNT" -eq 1 ] || { [ $((CNT % 12)) -eq 0 ] && [ $(( $(now_ms) - LASTCHK )) -ge 120 ]; }; then
-      NS=$(istate)
-      if [ "$NS" -ne "$PAUSED" ]; then
-        if [ "$NS" -eq 1 ]; then
-          if [ $ACTIVE -eq 1 ]; then
-            ACTIVE=0; STARTED=0
-            log "PAUSE_TRUNC 放弃未完成手势 $SX,$SY"
-          fi
-          log "PAUSE 锁屏/暗屏"
-        else
-          T0=$(now_ms)
-          log "RESUME 亮屏解锁"
-        fi
-        PAUSED=$NS
-      fi
-      if [ $APPAWARE -eq 1 ]; then
-        FP=$(fg_pkg)
-        LAST_FG=$FP
-        if [ "$READY" = "0" ]; then
-          # 诊断: 每20次检查(~6s)打一次前台返回值, 定位"识别不到app"
-          FGW=$((FGW+1))
-          if [ $((FGW % 20)) -eq 1 ]; then
-            log "FGWAIT 前台=<${FP}> 目标=<${PKG}> 等待目标app到前台"
-          fi
-          # 非空 P_PKG 必须等目标 App；不能因前台解析暂时失败就偷偷改成全量裸录。
-          # 这里只给出可见提示，状态仍保持等待，避免录到桌面/其它 App。
-          if [ $(( $(date +%s) - TSTART )) -ge 45 ] && [ $((FGW % 20)) -eq 1 ]; then
-            log "WAIT_APP 45s仍未识别目标app($PKG), 继续等待，不降级裸录"
-          fi
-        fi
-        case "$FP" in
-          "$PKG")
-            # 目标app在前台
-            MISS=0
-            if [ "$READY" = "0" ]; then
-              READY=1
-              T0=$(now_ms)
-              log "READY 目标app已到前台, 开始录取"
-            elif [ "$APP_PAUSE" = "1" ]; then
-              APP_PAUSE=0
-              T0=$(now_ms)
-              log "RESUME 回到目标app, 继续录取"
-            fi
-            ;;
-          permissioncontroller|com.android.permissioncontroller|com.android.systemui|com.android.settings)
-            # 权限弹窗/系统UI覆盖: 仍算目标app操作会话, 不停录不截断
-            MISS=0
-            ;;
-          *)
-            # 空结果或其它包不能证明仍在目标app；连续N次确认才真暂停。
-            # 手势进行中不掐断，等抬手由 put_gesture 精确复查裁决。
-            MISS=$((MISS+1))
-            if [ "$READY" = "1" ] && [ "$APP_PAUSE" = "0" ] && [ $MISS -ge 3 ]; then
-              if [ $ACTIVE -eq 1 ]; then
-                log "PEND_QUIT 离开确认中但手势未完成, 等抬手裁决 起点$SX,$SY"
-              else
-                APP_PAUSE=1
-                log "PAUSE 离开目标app (连续$MISS次确认)"
-              fi
-              MISS=0
-            fi
-            ;;
-        esac
-      fi
-      # 检查完成后再记时间；dumpsys 较慢时不会让下一行立即重复检查。
-      LASTCHK=$(now_ms)
-      # 录制暂停 (锁屏/暗屏/不在目标 app/还在等 app) 时让验证码 worker 退避到 3 s 一次; 只在状态变化时写盘
-      CAP_IDLE_N=0
-      { [ "$PAUSED" = "1" ] || [ "$READY" = "0" ] || [ "$APP_PAUSE" = "1" ]; } && CAP_IDLE_N=1
-      if [ -n "$CAP_PID" ] && [ "$CAP_IDLE_N" != "${CAP_IDLE:-0}" ]; then
-        CAP_IDLE=$CAP_IDLE_N
-        if [ "$CAP_IDLE" = "1" ]; then : > "$BASE/captcha.idle"; else rm -f "$BASE/captcha.idle"; fi
-      fi
+    # 事件足够密时按行触发; 行数少(快速滑动只有几十行)时仍由空闲 tick 兜底复查。
+    # 节流用秒计数: 32 位 sh 里 now_ms 的毫秒值会溢出, 12 行除数已提供足够背压。
+    if [ "$CNT" -eq 1 ] || { [ $((CNT % 12)) -eq 0 ] && [ $(( $(date +%s) - LASTCHK_S )) -ge 1 ]; }; then
+      LASTCHK_S=$(date +%s)
+      rec_check
     fi
     # 验证码在屏 (worker 建的标志): 暂停录取。按下发生在标志存在期间的手势一律不录
     # (含 worker 自己的 input 注入 —— 它走 InputManager 不经 $TDEV, 这里再兜一层);
@@ -748,7 +786,7 @@ stop() {
   # 兜底: 按命令行杀掉管道子壳/getevent (读取端消失后 getevent 会 SIGPIPE 自灭)
   pkill -9 -f "record.sh _daemon $N" 2>/dev/null
   # 验证码 worker 随进程组一起被杀, 来不及删自己的标志; 它若漏网也会在 0.7 s 内发现主人已死自行退出
-  rm -f "$BASE/captcha.on" "$BASE/captcha.idle" 2>/dev/null
+  rm -f "$BASE/captcha.on" "$BASE/captcha.idle" "$BASE/rec.ready" 2>/dev/null
   sleep 0.6
   # 恢复录制前屏幕常亮状态
   restore_rec_stayon
@@ -783,6 +821,8 @@ stop() {
 status() {
   if [ -f $PIDF ] && kill -0 $(cat $PIDF 2>/dev/null) 2>/dev/null; then
     echo "recording=yes pid=$(cat $PIDF) name=$(cat $NAME 2>/dev/null)"
+    # ready: 0 = 还在等目标 app 到前台, 1 = 已在录取 (锁屏/离开 app 另由 state 表达)
+    if [ -f "$BASE/rec.ready" ]; then echo "ready=1"; else echo "ready=0"; fi
     echo "state=$(istate)  # 0=录取中 1=暂停(锁屏)"
     CNT=$(rec_count_rx "$TMP")
     echo "actions=${CNT:-0}"

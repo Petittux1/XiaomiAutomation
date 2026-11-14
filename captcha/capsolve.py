@@ -745,7 +745,7 @@ class Session:
 
     def solve(self, d):
         """求解已检测到的验证码 -> (status, 说明)。
-        status: solved | fail (解不出 / 厂商锁 / 提交后出现无图对话框) | skip (不是验证码或不支持, 继续流程)。"""
+        status: solved | fail (解不出 / 厂商锁) | skip (不是验证码或不支持, 继续流程)。"""
         kind = d["kind"]
         acted = False
         for attempt in range(REFRESH_MAX + 1):
@@ -806,7 +806,7 @@ class Session:
         return "fail", "unsolved:%s after %d refreshes" % (kind, REFRESH_MAX)
 
     def gone(self, wait):
-        """提交后: True = 验证码消失; False = 还在; 字符串 = 失败原因 (厂商锁 / 无图对话框, 无法确认成功)。"""
+        """提交后: True = 验证码消失(含无图成功确认弹窗); False = 还在; 字符串 = 失败原因 (厂商锁)。"""
         end = time.time() + wait
         while True:
             time.sleep(0.6)
@@ -814,8 +814,11 @@ class Session:
             if d["kind"] == "locked":
                 return "locked: vendor 'too many attempts' dialog after submit"
             if d["kind"] == "none":
+                # 提交后验证码已消失。此时可能还有一层无图弹窗 —— 实测是签到成功的
+                # 确认框 (画面最终停在成功页), 而非失败: 厂商锁是 locked 且在上面先拦,
+                # 解错时验证码仍会留在屏上走刷新重试。这里按成功收尾。
                 if d.get("modal"):
-                    return "picture-less dialog after submit, success not verified"
+                    log("picture-less dialog after submit treated as success")
                 return True
             if time.time() > end:
                 return False
