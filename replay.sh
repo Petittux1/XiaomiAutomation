@@ -270,6 +270,33 @@ cap_gate() {
   exit 4
 }
 
+# 回放动作跑完后做「验证码结算」: 旧版只 sleep 1.5 s 查一次就 REPLAY_END,
+# 而此时验证码可能刚弹出、正在换图、或求解到一半。worker 一旦把换图加载帧
+# 判成 solved gone, 调度器立刻 V2_CLEANUP + V2_SLEEP 锁屏, 用户看到的就是
+# 「明明还没弄完 captcha 就锁屏杀后台」。这里每轮都让 worker 重新 detect+solve,
+# 连续两轮确认画面已无验证码才允许收尾。
+cap_final() {
+  [ -n "$CAP_PID" ] || return 0
+  CF_STABLE=0
+  CF_TRY=0
+  while [ $CF_TRY -lt 8 ]; do
+    [ -n "$CAP_PID" ] || return 0   # worker 已退出: 没有求解器就别再卡住回放
+    CF_TRY=$((CF_TRY+1))
+    sleep 2
+    if cap_check; then
+      case "$CAP_RES" in
+        none\ *) CF_STABLE=$((CF_STABLE+1));;
+        *) CF_STABLE=0;;             # solved/skip 后又出现东西 -> 继续确认
+      esac
+      [ $CF_STABLE -ge 2 ] && return 0
+    else
+      CF_STABLE=0                    # fail: 再给几轮机会, worker 内部会刷新重试
+      echo $(date +%m%d-%H%M) CAPTCHA_SETTLE_RETRY $N try=$CF_TRY >> $LOGF
+    fi
+  done
+  return 1
+}
+
 # 跨设备回放缩放 (v0.11.0, 默认关)
 # 录制时 record.sh 把几何写进了 actions.rx 首行的 #RX1 头。这里读回来, 若本 profile
 # 显式开启 P_SCALE=1, 就按「当前分辨率 / 录制时分辨率」把每个动作坐标等比换算。
@@ -368,10 +395,12 @@ if [ "$STEP" -eq 0 ]; then
   echo "ERR no valid actions in $RX" >&2
   exit 2
 fi
-# 最后一个动作也可能弹出验证码 (例如签到按钮本身): 给它 1.5 s 出现再查一次
-if [ -n "$CAP_PID" ]; then
-  sleep 1.5
-  cap_gate
+# 最后一个动作也可能弹出验证码 (例如签到按钮本身): 结算到确认无验证码才收尾,
+# 否则调度器会把「还在解」当成跑完最后一步, 直接杀后台 + 熄屏。
+if ! cap_final; then
+  echo $(date +%m%d-%H%M) REPLAY_FAIL $N captcha_unsolved_at_final >> $LOGF
+  echo "ERR captcha unsolved at final settle" >&2
+  exit 4
 fi
 echo $(date +%m%d-%H%M) REPLAY_END $N steps=$STEP >> $LOGF
 echo "REPLAY_DONE $N steps=$STEP"

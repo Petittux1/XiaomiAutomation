@@ -899,15 +899,23 @@ run_profile() {
     [ $RC -eq 4 ] && echo "$RUN_T 3" > $CDIR/try.txt
     echo $(date +%m%d-%H%M) V2_FAIL$RC P=$PN >> $LOG
   fi
-  # 任务结束(成功/跳过/失败都执行): 回收目标 app 内存, 让它退出后台。
-  # 放在熄屏之前, 保证"清完再熄屏"; 只处理本次真正打开过的包名。
-  # 注: 每日首次打开工行的链路B不走这里 —— 那时用户正在用手机, 不该被踢出 app。
-  cleanup_app "$P_PKG" "$PN" "$CLEANO"
-  if [ "${SLEEP_AFTER:-1}" = "1" ]; then
-    sleep 3
-    svc power stayon false 2>/dev/null
-    [ -n "$PDEV" ] && { sendevent $PDEV 1 116 1; sendevent $PDEV 0 0 0; sleep 0.05; sendevent $PDEV 1 116 0; sendevent $PDEV 0 0 0; }
-    echo $(date +%m%d-%H%M) V2_SLEEP P=$PN >> $LOG
+  # rc 4 = replay.sh 报「验证码没解出」。此时绝不能杀后台/主动熄屏: 屏幕一黑
+  # screencap 全黑, 求解器再也无法识别; app 被 force-stop 后连手动补救都没了。
+  # 留着画面和 app, 电源与方向仍照常恢复 (restore_power_bak 把 stayon/timeout
+  # 还原成用户原值, 系统按原设置自然熄屏, 不会无限常亮)。
+  if [ $RC -eq 4 ]; then
+    echo $(date +%m%d-%H%M) V2_HOLD_CAPTCHA P=$PN "(no cleanup/sleep: captcha unsolved)" >> $LOG
+  else
+    # 任务结束(成功/跳过/失败都执行): 回收目标 app 内存, 让它退出后台。
+    # 放在熄屏之前, 保证"清完再熄屏"; 只处理本次真正打开过的包名。
+    # 注: 每日首次打开工行的链路B不走这里 —— 那时用户正在用手机, 不该被踢出 app。
+    cleanup_app "$P_PKG" "$PN" "$CLEANO"
+    if [ "${SLEEP_AFTER:-1}" = "1" ]; then
+      sleep 3
+      svc power stayon false 2>/dev/null
+      [ -n "$PDEV" ] && { sendevent $PDEV 1 116 1; sendevent $PDEV 0 0 0; sleep 0.05; sendevent $PDEV 1 116 0; sendevent $PDEV 0 0 0; }
+      echo $(date +%m%d-%H%M) V2_SLEEP P=$PN >> $LOG
+    fi
   fi
   # timeout/stayon 无论是否自动熄屏都恢复，避免脚本留下常亮副作用。
   restore_power_bak
