@@ -374,9 +374,9 @@ else:
 print("== record loop gating")
 check(C.RECORD_GATE is False,
       "record: solver runs in background by default (captcha.on gate NOT created)")
-check(C.RECORD_REFRESH_MAX <= 4 and C.RECORD_SOLVE_BUDGET <= 40 and C.REFRESH_MAX == 8,
-      "record: short budget %d refreshes / %.0f s, replay keeps %d / %.0f s" %
-      (C.RECORD_REFRESH_MAX, C.RECORD_SOLVE_BUDGET, C.REFRESH_MAX, C.SOLVE_BUDGET))
+check(C.RECORD_REFRESH_MAX == C.REFRESH_MAX and C.RECORD_SOLVE_BUDGET == C.SOLVE_BUDGET,
+      "record: keeps retrying with the SAME budget as replay (%d refreshes / %.0f s)" %
+      (C.RECORD_REFRESH_MAX, C.RECORD_SOLVE_BUDGET))
 
 _flag = os.path.join(os.environ.get("TMPDIR") or os.environ.get("TEMP") or "/tmp", "cap_gate_test.flag")
 _blank = np.zeros((64, 64, 3), np.uint8)
@@ -417,7 +417,7 @@ seen, kw = _one_record_loop(False)
 check(seen is False and os.path.exists(_flag) is False,
       "record: two confirmed icon frames -> NO gate file, user gestures keep recording")
 check(kw.get("refresh_max") == C.RECORD_REFRESH_MAX and kw.get("budget") == C.RECORD_SOLVE_BUDGET,
-      "record: solve() gets short budget %s" % kw)
+      "record: solve() gets full retry budget %s" % kw)
 seen_gate, _ = _one_record_loop(True)
 check(seen_gate is True and os.path.exists(_flag) is False,
       "record: CAP_RECORD_GATE=1 restores old gate and always removes it afterwards")
@@ -446,6 +446,48 @@ try:
     os.remove(_flag)
 except OSError:
     pass
+
+
+def _retry_run(detect_fn, rmax=3):
+    """提交一直不成功时, 看 solve() 是否持续换图并重新点选 (而不是一次就收工)。"""
+    taps, refs, clk = [], [], [2000.0]
+    saved = (C.time.time, C.time.sleep, C.capture, C.detect, C.plan_icon,
+             C.photo_sig, C.log, C.tap, C.Session.refresh, C.Session.gone)
+    C.time.time = lambda: clk[0]
+    C.time.sleep = lambda s: clk.__setitem__(0, clk[0] + s)
+    C.capture = lambda: _blank
+    C.detect = detect_fn
+    C.plan_icon = lambda img, d: ([(10, 10), (20, 20), (30, 30)], {"hints": 3, "cands": 3})
+    C.photo_sig = lambda img, d: "sig"
+    C.log = lambda *a, **k: None
+    C.tap = lambda x, y: taps.append((x, y))
+    C.Session.refresh = lambda self, btn, before=None: (refs.append(btn), True)[1]
+    C.Session.gone = lambda self, wait: False
+    try:
+        st, why = C.Session().solve({"kind": "icon"}, refresh_max=rmax, budget=100000)
+    finally:
+        (C.time.time, C.time.sleep, C.capture, C.detect, C.plan_icon,
+         C.photo_sig, C.log, C.tap, C.Session.refresh, C.Session.gone) = saved
+    return st, why, len(taps), len(refs)
+
+_icon = {"kind": "icon", "photo": (0, 0, 64, 64), "refresh": (1, 1), "confirm": None}
+st_r, why_r, taps_r, refs_r = _retry_run(lambda img: dict(_icon))
+check(st_r == "fail" and refs_r >= 3 and taps_r >= 9,
+      "after each refresh the solver re-plans and taps again (%d refresh taps, %d icon taps) -> %s" %
+      (refs_r, taps_r, why_r))
+
+_n = [0]
+
+
+def _swap_frames(img):
+    """提交后厂商自动换图: 两帧空白, 随后新题出现。空白不能当成 solved。"""
+    _n[0] += 1
+    return {"kind": "none"} if _n[0] % 4 in (2, 3) else dict(_icon)
+
+
+st_s, why_s, taps_s, _ = _retry_run(_swap_frames)
+check(st_s == "fail" and taps_s >= 9,
+      "vendor swap blank frames are NOT reported as solved (%d icon taps) -> %s" % (taps_s, why_s))
 
 print("== %s" % ("ALL PASS" if fails == 0 else "%d FAIL" % fails))
 sys.exit(1 if fails else 0)

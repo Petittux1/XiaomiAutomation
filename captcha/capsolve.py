@@ -24,12 +24,15 @@ REFRESH_GAP = 3.5        # 两次刷新之间至少间隔 (秒), 防厂商「尝
 # 实际丢掉的是用户自己的手势。真机 15:47-15:49: solve() 变成 8 次刷新/240 s 长循环,
 # 闸门全程存在, 用户 20-30 s 的录制整段 Empty。默认关, CAP_RECORD_GATE=1 可恢复旧行为。
 RECORD_GATE = os.environ.get("CAP_RECORD_GATE", "0") != "0"
-RECORD_REFRESH_MAX = int(os.environ.get("CAP_RECORD_REFRESH_MAX", "4"))
-RECORD_SOLVE_BUDGET = float(os.environ.get("CAP_RECORD_SOLVE_BUDGET", "35"))
 LOCK_WAIT = float(os.environ.get("CAP_LOCK_WAIT", "20"))    # 厂商锁冷却 (秒)
 LOCK_MAX = int(os.environ.get("CAP_LOCK_MAX", "3"))         # 最多等几次锁
 SOLVE_BUDGET = float(os.environ.get("CAP_SOLVE_BUDGET", "240"))  # 单次求解总预算 (秒)
 GONE_WAIT = float(os.environ.get("CAP_GONE_WAIT", "5.0"))   # 提交后等结果 (秒), 太短会误刷新掉慢一拍的成功
+# 录制后台求解: 既然不阻塞录取, 就没有理由给短预算 —— 和回放一样一路刷新到解开。
+# 16:10 真机验证时曾设 4 次/35 s, 用户看到「刷新一次后不再试」, 正是撞上这个上限。
+# 需要实验性缩短时可用 CAP_RECORD_REFRESH_MAX / CAP_RECORD_SOLVE_BUDGET 单独覆盖。
+RECORD_REFRESH_MAX = int(os.environ.get("CAP_RECORD_REFRESH_MAX", str(REFRESH_MAX)))
+RECORD_SOLVE_BUDGET = float(os.environ.get("CAP_RECORD_SOLVE_BUDGET", str(SOLVE_BUDGET)))
 TAP_GAP = 0.8            # 点选间隔, 真机验证 0.8 s 可通过
 HINT_MIN_DARK = int(os.environ.get("CAP_HINT_MIN_DARK", "3"))   # Geetest 深色面板固定 3 个提示图
 TAP_MIN_DIST = float(os.environ.get("CAP_TAP_MIN_DIST", "48"))  # 两次点选的最小间距 (px)
@@ -902,6 +905,7 @@ class Session:
         btn 由调用方给: 深色页脚的形状检测偶尔选不出唯一刷新钮, 这时复用上一帧
         记住的坐标 (位置固定), 旧版直接 return False 就一下都不刷新了。"""
         if not btn:
+            log("refresh button unknown, waiting %.0f s for the vendor to replace the picture" % REFRESH_GAP)
             return False
         wait = REFRESH_GAP - (time.time() - self.last_refresh)
         if wait > 0:
@@ -1028,11 +1032,22 @@ class Session:
             if d2["kind"] == "locked":
                 continue                      # 下一轮循环顶部按厂商锁冷却处理, 别在锁弹窗上乱点
             if d2["kind"] == "none":
-                time.sleep(0.6)
-                if detect(capture())["kind"] == "none":
-                    if tapped:
-                        return "solved", "gone"
-                    continue
+                # 提交后短暂空白有两种可能: 真的解开了、或厂商自动换图/加载。
+                # 只连看 2 帧就判 solved 会把换图空白当成功, 于是「刷新一次后不再试」。
+                # 连看 4 帧 (约 2.4 s): 期间露出新题就回到循环顶部重新规划点选;
+                # 只有持续没有任何弹窗且确实提交过, 才认慢一拍的成功。
+                blank = 0
+                for _ in range(4):
+                    time.sleep(0.6)
+                    if detect(capture())["kind"] != "none":
+                        blank = -1
+                        break
+                    blank += 1
+                if blank >= 4 and tapped:
+                    return "solved", "gone"
+                if blank < 0:
+                    log("new picture appeared after submit, re-planning (no refresh tap needed)")
+                continue
             btn = d2.get("refresh") or last_refresh
             before = photo_sig(img2, d2)
             if before is None:
