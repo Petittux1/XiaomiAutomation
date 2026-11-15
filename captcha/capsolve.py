@@ -341,6 +341,21 @@ def find_buttons(img, modal, photo):
             if confirm is None or cx < confirm[0] - 150:
                 icons.append((cx, by0 + (gy0 + gy1) // 2))
     icons.sort()
+    if darkp and icons:
+        # 深色页脚固定为 [关闭X, 刷新, 反馈, 声音]: 刷新是两段断弧, 图标中带 (行 1/3..2/3)
+        # 占用率明显低于其它三个 (实测 0.23 vs 0.42+)。按形状选, 选不出唯一一个就不给刷新钮
+        # (宁可等厂商自动换图, 也绝不误点关闭)。位置序 (icons[1]) 在帧间不稳定, 会点到关闭。
+        picked = []
+        for (cx, cy) in icons:
+            ry, rx = cy - by0, cx - x0
+            crop = reg[max(0, ry - 40):ry + 40, max(0, rx - 40):rx + 40]
+            if crop.shape[0] < 60 or crop.shape[1] < 60:
+                continue
+            gm = crop.mean(2) > 100
+            mid = float(gm.mean(1)[gm.shape[0] // 3: gm.shape[0] * 2 // 3].max())
+            if mid < 0.32:
+                picked.append((cx, cy))
+        icons = picked if len(picked) == 1 else []
     return confirm, icons
 
 
