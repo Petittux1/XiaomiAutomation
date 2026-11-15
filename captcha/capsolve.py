@@ -244,8 +244,8 @@ def find_photo(img, modal):
     x0, y0, x1, y1 = modal
     reg = img[y0:y1:2, x0:x1:2].astype(np.int16)
     pcol = panel_color(img, modal)
-    if pcol.mean() < 95:   # 深色面板: 图片 = 与面板底色差明显的区域 (阈值放低, 图片暗部也算)
-        nonp = np.abs(reg - pcol).max(2) > 25
+    if pcol.mean() < 95:   # 深色面板: 图片 = 与面板底色差明显或彩度高的区域 (图片暗部/深蓝底也算)
+        nonp = (np.abs(reg - pcol).max(2) > 25) | (reg.max(2) - reg.min(2) > 30)
     else:                  # 白弹窗: 图片 = 非白区域
         nonp = reg.min(2) < 235
     r = runs(nonp.mean(1), 0.6, gap=3)
