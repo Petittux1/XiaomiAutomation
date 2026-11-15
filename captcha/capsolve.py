@@ -199,39 +199,60 @@ S = 4  # 粗检测下采样步长
 
 
 def find_modal(img):
-    """暗色遮罩上的白色弹窗 -> (x0,y0,x1,y1) 全分辨率, 否则 None。"""
+    """遮罩上的弹窗 -> (x0,y0,x1,y1) 全分辨率, 否则 None。两种极性:
+    白底弹窗 (暗遮罩上的白块, 厂商通用), 或深色面板 (Geetest 深色皮肤 / Chrome 强制暗色)。"""
     sm = img[::S, ::S]
     H, W = sm.shape[:2]
-    white = sm.min(2) >= 235
-    _, boxes = components(white)
     lum = sm.mean(2)
-    best = None
-    for (x0, y0, x1, y1, area) in boxes:
-        bw, bh = x1 - x0, y1 - y0
-        if bw < 0.45 * W or bh < 0.12 * H or x0 < 2 or x1 > W - 2 or y0 < 2 or y1 > H - 2:
-            continue
-        m = 4
-        ring = np.concatenate([lum[max(0, y0 - m):y0, x0:x1].ravel(), lum[y1:y1 + m, x0:x1].ravel(),
-                               lum[y0:y1, max(0, x0 - m):x0].ravel(), lum[y0:y1, x1:x1 + m].ravel()])
-        if ring.size == 0 or ring.mean() > 110:   # 弹窗外必须是压暗的遮罩
-            continue
-        if best is None or bw * bh > best[2] * best[3]:
-            best = (x0, y0, bw, bh)
-    if best is None:
-        return None
-    x0, y0, bw, bh = best
-    return (x0 * S, y0 * S, (x0 + bw) * S, (y0 + bh) * S)
+    mx = sm.max(2).astype(np.int16)
+    mn = sm.min(2)
+    for pol, mask in (("light", mn >= 235), ("dark", (mx - mn < 28) & (lum < 95))):
+        _, boxes = components(mask)
+        best = None
+        for (x0, y0, x1, y1, area) in boxes:
+            bw, bh = x1 - x0, y1 - y0
+            if bw < 0.45 * W or bh < 0.12 * H or x0 < 2 or x1 > W - 2 or y0 < 2 or y1 > H - 2:
+                continue
+            m = 4
+            ring = np.concatenate([lum[max(0, y0 - m):y0, x0:x1].ravel(), lum[y1:y1 + m, x0:x1].ravel(),
+                                   lum[y0:y1, max(0, x0 - m):x0].ravel(), lum[y0:y1, x1:x1 + m].ravel()])
+            if ring.size == 0:
+                continue
+            if pol == "light":
+                if ring.mean() > 150:   # 弹窗外必须是压暗的遮罩 (灰蒙层 ~127 也算)
+                    continue
+            else:
+                # 深色面板: 面板内要有亮内容 (题头/提示块), 且外环与面板亮度差明显 (整屏暗底不算)
+                inside = lum[y0:y1, x0:x1]
+                if (inside > 170).mean() < 0.004 or abs(ring.mean() - inside.mean()) < 12:
+                    continue
+            if best is None or bw * bh > best[2] * best[3]:
+                best = (x0, y0, bw, bh)
+        if best is not None:
+            x0, y0, bw, bh = best
+            return (x0 * S, y0 * S, (x0 + bw) * S, (y0 + bh) * S)
+    return None
+
+
+def panel_color(img, modal):
+    """弹窗面板底色: 顶部条带的中位色。亮面板 (厂商白底) -> 均值 >= 95, 深色面板 -> < 95。"""
+    x0, y0, x1, y1 = modal
+    return np.median(img[y0:min(y1, y0 + 40), x0:x1].reshape(-1, 3), axis=0)
 
 
 def find_photo(img, modal):
     x0, y0, x1, y1 = modal
-    reg = img[y0:y1:2, x0:x1:2]
-    nonw = reg.min(2) < 235
-    r = runs(nonw.mean(1), 0.6, gap=3)
+    reg = img[y0:y1:2, x0:x1:2].astype(np.int16)
+    pcol = panel_color(img, modal)
+    if pcol.mean() < 95:   # 深色面板: 图片 = 与面板底色差明显的区域 (阈值放低, 图片暗部也算)
+        nonp = np.abs(reg - pcol).max(2) > 25
+    else:                  # 白弹窗: 图片 = 非白区域
+        nonp = reg.min(2) < 235
+    r = runs(nonp.mean(1), 0.6, gap=3)
     if r is None:
         return None
     py0, py1 = r
-    c = runs(nonw[py0:py1].mean(0), 0.6, gap=3)
+    c = runs(nonp[py0:py1].mean(0), 0.6, gap=3)
     if c is None:
         return None
     px0, px1 = c
@@ -242,44 +263,67 @@ def find_photo(img, modal):
 
 
 def find_hint_box(img, modal, photo):
-    """题头里的提示图: 一块非纯白(背景 ~252)的实心矩形, 内含灰色线稿图标。"""
-    x0, y0, x1, _ = modal
+    """题头里的提示图: 亮面板 = 一块非纯白的实心矩形, 内含灰色线稿图标;
+    深色面板 = 题头右侧一排亮色提示块 (白描边图标, Geetest), 文字块更矮被排除。"""
+    x0, y0, x1, y1 = modal
     hy1 = photo[1]
     reg = img[y0:hy1, x0:x1]
     if reg.shape[0] < 20:
         return None
-    m = reg.min(2) < 254
-    lab, boxes = components(m)
-    best = None
+    if panel_color(img, modal).mean() >= 95:
+        m = reg.min(2) < 254
+        lab, boxes = components(m)
+        best = None
+        for (bx0, by0, bx1, by1, area) in boxes:
+            bw, bh = bx1 - bx0, by1 - by0
+            if bw < 60 or bh < 40 or area < 0.85 * bw * bh:
+                continue
+            if bw > 0.9 * (x1 - x0):
+                continue
+            if best is None or area > best[4]:
+                best = (bx0, by0, bx1, by1, area)
+        if best is None:
+            return None
+        return (x0 + best[0], y0 + best[1], x0 + best[2], y0 + best[3])
+    m = reg.mean(2) > 150
+    _, boxes = components(dilate(m, 3))
+    ux0 = uy0 = 10 ** 9
+    ux1 = uy1 = -1
     for (bx0, by0, bx1, by1, area) in boxes:
         bw, bh = bx1 - bx0, by1 - by0
-        if bw < 60 or bh < 40 or area < 0.85 * bw * bh:
+        # 汉字块膨胀后高 <= 57, 提示块 (白描边图标+方框) 高 ~77+; 边缘竖条被 bw 下限挡掉
+        if bh < 65 or bw < 40 or bw > 0.25 * (x1 - x0):
             continue
-        if bw > 0.9 * (x1 - x0):
-            continue
-        if best is None or area > best[4]:
-            best = (bx0, by0, bx1, by1, area)
-    if best is None:
+        ux0, uy0, ux1, uy1 = min(ux0, bx0), min(uy0, by0), max(ux1, bx1), max(uy1, by1)
+    if ux1 < 0:
         return None
-    return (x0 + best[0], y0 + best[1], x0 + best[2], y0 + best[3])
+    return (x0 + ux0, y0 + uy0, x0 + ux1, y0 + uy1)
 
 
 def find_buttons(img, modal, photo):
-    """图片下方按钮栏: 最大的蓝色块 = 确认; 左侧灰色小图标按 x 排序 = [关闭, 刷新, ...]。"""
+    """图片下方按钮栏: 最大的蓝色块 = 确认; 小图标按 x 排序 = [关闭, 刷新, ...]
+    (亮面板上是灰色小图标, 深色面板上是亮色描边图标)。"""
     x0, _, x1, y1 = modal
     by0 = photo[3]
     reg = img[by0:y1, x0:x1].astype(np.int16)
     if reg.shape[0] < 20:
         return None, []
     r, g, b = reg[..., 0], reg[..., 1], reg[..., 2]
-    blue = (b - r > 30) & (b > 150)
+    darkp = panel_color(img, modal).mean() < 95
+    if darkp:   # 深色面板: 确认按钮是暗蓝 (68,81,126), b > 150 会漏掉
+        blue = (b - r > 30) & (b > 100)
+    else:
+        blue = (b - r > 30) & (b > 150)
     _, boxes = components(blue)
     confirm = None
     big = [bx for bx in boxes if bx[4] > 2000]
     if big:
         bx = max(big, key=lambda t: t[4])
         confirm = (x0 + (bx[0] + bx[2]) // 2, by0 + (bx[1] + bx[3]) // 2)
-    grey = (reg.max(2) < 200) & (reg.max(2) - reg.min(2) < 30)
+    if darkp:
+        grey = reg.mean(2) > 100   # 深色面板页脚小图标是中灰 (126)
+    else:
+        grey = (reg.max(2) < 200) & (reg.max(2) - reg.min(2) < 30)
     _, gb = components(dilate(grey, 3))
     # 刷新图标是上下两段弧: 横向中心相近的块并成一个图标
     groups = []
@@ -301,25 +345,32 @@ def find_buttons(img, modal, photo):
 
 
 def find_slider_track(img, modal, photo):
-    """图片下方横跨的滑轨 (非白, 宽 >= 图片 70%, 高 30..160)。"""
+    """图片下方横跨的滑轨 (非白, 宽 >= 图片 70%, 高 30..160)。
+    深色面板 (Geetest): 滑轨是略亮于面板的暗条 (色差 ~15), 滑钮是蓝块。"""
     x0, _, x1, y1 = modal
     reg = img[photo[3]:y1, photo[0]:photo[2]]
     if reg.shape[0] < 30:
-        return None
-    nonw = reg.min(2) < 245
+        return None, None
+    darkp = panel_color(img, modal).mean() < 95
+    if darkp:
+        pcol = panel_color(img, modal)
+        nonw = np.abs(reg.astype(np.int16) - pcol).max(2) > 14
+    else:
+        nonw = reg.min(2) < 245
     r = runs(nonw.mean(1), 0.7, gap=2)
     if r is None or not (30 <= r[1] - r[0] <= 160):
         return None, None
     ty0, ty1 = photo[3] + r[0], photo[3] + r[1]
     trk = img[ty0:ty1, photo[0]:photo[2]].astype(np.int16)
     tw = trk.shape[1]
-    # 滑钮: 轨道左端一块与轨道底色明显不同的方块 (宽 5%..25% 轨长)
+    # 滑钮: 轨道左端一块与轨道底色明显不同的方块 (宽 5%..25% 轨长; Geetest 滑钮宽 ~27%)
     base = np.median(trk[:, tw // 2:].reshape(-1, 3), axis=0)
     cols = np.nonzero((np.abs(trk - base).sum(2) > 60).mean(0) > 0.5)[0]
     if not len(cols) or cols[0] > 0.1 * tw:
         return None, None
     run = runs(np.isin(np.arange(tw), cols).astype(float), 0.5)
-    if run is None or run[0] > 0.1 * tw or not (0.05 * tw <= run[1] - run[0] <= 0.25 * tw):
+    wmax = 0.32 if darkp else 0.25
+    if run is None or run[0] > 0.1 * tw or not (0.05 * tw <= run[1] - run[0] <= wmax * tw):
         return None, None
     return (photo[0], ty0, photo[2], ty1), (photo[0] + (run[0] + run[1]) // 2, (ty0 + ty1) // 2)
 
@@ -350,7 +401,8 @@ def detect(img):
     head = img[modal[1]:photo[1], modal[0]:modal[2]]
     # 文字点选候选: 题头有字 + 图片 + 图片下方的刷新/关闭小图标。仍只是候选 ——
     # 题头 OCR 必须读出「依次点击…」句式才会动手 (plan_word), 普通「点击领取」弹窗到此为止。
-    if (head.max(2) < 110).sum() > 300 and icons:
+    # 深色面板 (Geetest) 整头都是暗底, 此规则必误报, 只对亮面板开放。
+    if panel_color(img, modal).mean() >= 95 and (head.max(2) < 110).sum() > 300 and icons:
         d["kind"] = "word"
     return d
 
@@ -371,10 +423,14 @@ def find_lock(img, modal):
 
 # ---------------- 图标点选 ----------------
 def split_hint(img, hint):
-    """提示图 -> 每个图标的 bool 掩码列表 (左到右)。相邻图标可能粘连: 按墨迹高度估个数再在投影谷底切。"""
+    """提示图 -> 每个图标的 bool 掩码列表 (左到右)。相邻图标可能粘连: 按墨迹高度估个数再在投影谷底切。
+    深色提示块 (Geetest): 墨迹 = 亮色描边; 亮面板: 墨迹 = 深色笔画。"""
     x0, y0, x1, y1 = hint
     reg = img[y0:y1, x0:x1].astype(np.int16)
-    ink = reg.mean(2) < 200
+    if np.median(reg.reshape(-1, 3), axis=0).mean() < 95:
+        ink = reg.mean(2) > 150
+    else:
+        ink = reg.mean(2) < 200
     ys = np.nonzero(ink.any(1))[0]
     if len(ys) < 10:
         return []
@@ -419,8 +475,9 @@ def split_hint(img, hint):
     return out
 
 
-def icon_candidates(img, photo, step=2):
-    """图片中纯色图标 -> [(mask, (cx, cy) 全分辨率, bbox), ...]。"""
+def icon_candidates(img, photo, step=2, sd_max=10):
+    """图片中纯色图标 -> [(mask, (cx, cy) 全分辨率, bbox), ...]。sd_max: 掩码内颜色波动上限
+    (渐变色块拒绝); 深色渲染 (Chrome 强制暗色) 抖动噪声大, 调用方可放宽。"""
     x0, y0, x1, y1 = photo
     P = img[y0:y1:step, x0:x1:step].astype(np.int16)
     U = [np.ascontiguousarray(img[y0:y1:step, x0:x1:step, ch]) for ch in range(3)]
@@ -439,7 +496,7 @@ def icon_candidates(img, photo, step=2):
     keys = q[:, 0] * 4096 + q[:, 1] * 64 + q[:, 2]
     uk, cnt = np.unique(keys, return_counts=True)
     order = np.argsort(-cnt)
-    minpix = 0.004 * w * h        # 图标笔画面积下限 (~1000 px @ 494x494)
+    minpix = 0.002 * w * h        # 图标笔画面积下限 (描边式图标 ~500 px; 实心式 ~1000 px @ 494x494)
     seen = np.zeros((h, w), bool)
     cands = []
     cols = P[seed]
@@ -475,7 +532,7 @@ def icon_candidates(img, photo, step=2):
             if not ring.any():
                 continue
             jump = float((np.abs(box[ring] - c).max(1) > 60).mean())
-            if sd > 10 or jump < 0.5:
+            if sd > sd_max or jump < 0.5:
                 continue
             seen[by0:by1, bx0:bx1] |= sub
             cx = x0 + step * (bx0 + bx1) // 2
@@ -512,7 +569,8 @@ def polar_sim(p, q):
 
 def plan_icon(img, d):
     hints = split_hint(img, d["hint"])
-    cands = icon_candidates(img, d["photo"])
+    darkp = panel_color(img, d["modal"]).mean() < 95
+    cands = icon_candidates(img, d["photo"], sd_max=16 if darkp else 10)
     if not hints or len(cands) < len(hints):
         # 图里连够数的纯色图标都没有: 多半是带横幅的普通弹窗, 不是验证码 -> 不刷新、不点
         return None, {"hints": len(hints), "cands": len(cands), "not_captcha": True}
