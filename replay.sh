@@ -279,18 +279,24 @@ cap_final() {
   [ -n "$CAP_PID" ] || return 0
   CF_STABLE=0
   CF_TRY=0
+  CF_FAIL=0
   while [ $CF_TRY -lt 8 ]; do
     [ -n "$CAP_PID" ] || return 0   # worker 已退出: 没有求解器就别再卡住回放
     CF_TRY=$((CF_TRY+1))
     sleep 2
     if cap_check; then
       case "$CAP_RES" in
-        none\ *) CF_STABLE=$((CF_STABLE+1));;
+        # worker 内部已确认「连续两帧无验证码」才返回 solved/none, 可直接计入稳定
+        none\ *|solved\ *|skip\ *) CF_STABLE=$((CF_STABLE+1)); CF_FAIL=0;;
         *) CF_STABLE=0;;             # solved/skip 后又出现东西 -> 继续确认
       esac
       [ $CF_STABLE -ge 2 ] && return 0
     else
-      CF_STABLE=0                    # fail: 再给几轮机会, worker 内部会刷新重试
+      CF_STABLE=0
+      CF_FAIL=$((CF_FAIL+1))
+      # fail = worker 已经持续刷新到预算上限仍没解开。再给一次完整机会即可,
+      # 否则一次任务会卡几十分钟; 仍失败就 rc=4, 调度器保留画面不锁屏。
+      [ $CF_FAIL -ge 2 ] && return 1
       echo $(date +%m%d-%H%M) CAPTCHA_SETTLE_RETRY $N try=$CF_TRY >> $LOGF
     fi
   done

@@ -60,17 +60,31 @@ if os.path.exists(lab_path):
         d = C.detect(img)
         pts, info = C.plan_icon(img, d) if d["kind"] == "icon" else (None, {})
         check(pts is None, "%s -> no new taps on an already-clicked picture (scores=%s)" % (name, info.get("scores")))
+    # 真机「点到一半」的 Geetest 残局帧: 必须判 weak -> 刷新, 绝不点残缺序列
+    for name in L.get("weak_no_plan", []):
+        f = os.path.join(FX, name)
+        if not os.path.exists(f):
+            continue
+        img = C.load(f)
+        d = C.detect(img)
+        pts, info = C.plan_icon(img, d) if d["kind"] == "icon" else (None, {})
+        check(pts is None and info.get("weak") is True,
+              "%s -> weak (%s), refresh instead of partial taps" % (name, info.get("reason")))
     print("  icon solve time: mean %.0f ms, max %.0f ms" % (sum(times) / len(times), max(times)))
 
     # Session.solve 的流程 (截屏/点击/睡眠全打桩, 不碰真机)
     tapt = []
 
-    def run_session(frames_after_taps, first):
+    def run_session(frames_after_taps, first, refresh_frames=None, strip_refresh=False):
+        """打桩一次完整求解。refresh_frames: 每点一次刷新钮就换到下一张 (模拟厂商换图);
+        strip_refresh: 第一帧之后的 detect 都不给刷新钮坐标 (验证缓存坐标仍会刷新)。"""
         taps, sleeps = [], []
         del tapt[:]
-        state = {"img": C.load(os.path.join(FX, first)), "n": 0}
+        state = {"img": C.load(os.path.join(FX, first)), "n": 0, "r": 0, "dc": 0}
         seq = [C.load(os.path.join(FX, f)) for f in frames_after_taps]
-        orig = (C.capture, C.tap, C.time.sleep, C.time.time)
+        rfs = [C.load(os.path.join(FX, f)) for f in (refresh_frames or [])]
+        real_detect = C.detect
+        orig = (C.capture, C.tap, C.time.sleep, C.time.time, C.detect)
         C.capture = lambda: state["img"]
         real = C.time.time
         vclock = lambda: real() + sum(sleeps)   # 虚拟时钟 = 真实耗时 + 打桩掉的睡眠
@@ -81,13 +95,24 @@ if os.path.exists(lab_path):
             if near((x, y), L["buttons"]["confirm"], 30):   # 点「确认」后换到下一帧
                 state["img"] = seq[min(state["n"], len(seq) - 1)]
                 state["n"] += 1
+            elif rfs and near((x, y), L["buttons"]["refresh"], 30):
+                state["img"] = rfs[min(state["r"], len(rfs) - 1)]
+                state["r"] += 1
         C.tap = fake_tap
+        if strip_refresh:
+            def fake_detect(im):
+                state["dc"] += 1
+                d = real_detect(im)
+                if state["dc"] > 1:
+                    d = {k: v for k, v in d.items() if k != "refresh"}
+                return d
+            C.detect = fake_detect
         C.time.sleep = lambda s: sleeps.append(s)   # 不真睡, 记下要睡多久
         C.time.time = vclock
         try:
             return C.Session().solve(C.detect(state["img"])), taps, sleeps
         finally:
-            C.capture, C.tap, C.time.sleep, C.time.time = orig
+            C.capture, C.tap, C.time.sleep, C.time.time, C.detect = orig
 
     (st, why), taps, sl = run_session(["xmsq_icon_13_after.png"], "xmsq_icon_13.png")
     want = L["icon"]["xmsq_icon_13.png"]
@@ -116,6 +141,23 @@ if os.path.exists(lab_path):
         C.capture, C.tap, C.time.sleep = orig
     check(dl["kind"] == "locked" and stl == "fail" and not taps2,
           "Session: vendor 'too many attempts' dialog -> kind=%s solve=%s (%s) taps=%s" % (dl["kind"], stl, whyl, taps2))
+
+    # 用户反馈: 「解不开就只刷新一次, 然后不继续努力」。现在必须一路换图,
+    # 直到出现一张能认全的图并真正解开为止, 期间绝不点残缺序列。
+    (st, why), taps, sl = run_session(
+        ["xmsq_icon_13_after.png"], "xmsq_icon_13_clicked.png",
+        refresh_frames=["xmsq_icon_13_clicked.png", "xmsq_icon_13.png"])
+    nr = sum(1 for t in taps if near(t, L["buttons"]["refresh"], 30))
+    nc = sum(1 for t in taps if near(t, L["buttons"]["confirm"], 30))
+    check(st == "solved" and nr >= 2 and nc == 1,
+          "Session: weak -> refresh %d times -> solvable picture -> %s %s (confirm=%d)" % (nr, st, why, nc))
+
+    # 深色页脚形状检测偶发选不出刷新钮: 必须复用上一帧记住的坐标, 不能干脆不刷新
+    (st2, why2), taps2, sl2 = run_session(
+        ["xmsq_icon_13_clicked.png"], "xmsq_icon_13_clicked.png", strip_refresh=True)
+    nr2 = sum(1 for t in taps2 if near(t, L["buttons"]["refresh"], 30))
+    check(st2 == "fail" and nr2 == C.REFRESH_MAX,
+          "Session: cached refresh button used %d times when later frames lack one -> %s" % (nr2, st2))
 else:
     print("== fixtures skipped (no %s)" % lab_path)
 
@@ -133,6 +175,41 @@ check(C.from_raw(raw).shape == (110, 120, 3), "raw screencap parse (16-byte head
 check(C.parse_word_targets("请依次点击【乾 坤 震】") == ["乾", "坤", "震"], "parse 【…】 targets")
 check(C.parse_word_targets("请依次点击：山水云") == ["山", "水", "云"], "parse colon targets")
 check(C.parse_word_targets("立即签到") == [], "parse: no targets on unrelated text")
+
+# ---------- 2a. 残局帧 / 重复候选 / 图片截断 ----------
+def badge_frame(with_badge):
+    im = Image.new("RGB", (220, 220), (30, 34, 42))
+    dr = ImageDraw.Draw(im)
+    dr.rectangle((120, 40, 200, 120), outline=(240, 180, 40), width=8)  # 普通彩色图标
+    if with_badge:
+        # 白心 + 厚蓝环, 与真机 Geetest 编号圆标的比例一致 (实测 ring 占比 0.47~0.55)
+        dr.ellipse((10, 80, 110, 180), fill=(40, 120, 240))
+        dr.ellipse((35, 105, 85, 155), fill=(250, 250, 250))
+    return np.asarray(im)
+
+
+check(C.has_badge(badge_frame(True), (0, 0, 220, 220)) and
+      not C.has_badge(badge_frame(False), (0, 0, 220, 220)),
+      "has_badge: numbered marker -> refresh, plain colored icon -> keep planning")
+
+c0 = [(None, (100, 100), None, 0, 900, 0), (None, (108, 104), None, 0, 300, 0),
+      (None, (400, 400), None, 0, 500, 0)]
+cd = C.dedup_candidates(c0, 48)
+check(len(cd) == 2 and cd[0][1] == (100, 100),
+      "dedup_candidates: keep bigger icon, drop overlapping duplicate")
+
+if os.path.exists(lab_path):
+    f13 = C.load(os.path.join(FX, "xmsq_icon_13.png"))
+    d13 = C.detect(f13)
+    d13["photo"] = (d13["photo"][0], d13["photo"][3] - 448, d13["photo"][2], d13["photo"][3])
+    opc = C.panel_color
+    C.panel_color = lambda im, m: np.zeros(3, dtype=np.int16)  # 伪装深色 Geetest 面板
+    try:
+        tp, ti = C.plan_icon(f13, d13)
+    finally:
+        C.panel_color = opc
+    check(tp is None and ti.get("reason") == "photo_truncated",
+          "plan_icon: truncated dark photo -> weak, no partial taps (%s)" % ti.get("reason"))
 
 
 def font(sz):

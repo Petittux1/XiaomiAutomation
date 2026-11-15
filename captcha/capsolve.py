@@ -17,9 +17,16 @@ from PIL import Image, ImageFilter
 
 DISPLAY = os.environ.get("CAP_DISPLAY", "")
 LOGF = os.environ.get("CAP_LOG", "")
-REFRESH_MAX = 2          # 每个验证码最多刷新次数 (厂商 ~6 次/15 s 即封, 见 fixtures/7_toomany)
-REFRESH_GAP = 3.5        # 两次刷新之间至少间隔 (秒)
+REFRESH_MAX = int(os.environ.get("CAP_REFRESH_MAX", "8"))   # 解不出就持续换图, 用完才认输
+REFRESH_GAP = 3.5        # 两次刷新之间至少间隔 (秒), 防厂商「尝试过多」限流
+LOCK_WAIT = float(os.environ.get("CAP_LOCK_WAIT", "20"))    # 厂商锁冷却 (秒)
+LOCK_MAX = int(os.environ.get("CAP_LOCK_MAX", "3"))         # 最多等几次锁
+SOLVE_BUDGET = float(os.environ.get("CAP_SOLVE_BUDGET", "240"))  # 单次求解总预算 (秒)
+GONE_WAIT = float(os.environ.get("CAP_GONE_WAIT", "5.0"))   # 提交后等结果 (秒), 太短会误刷新掉慢一拍的成功
 TAP_GAP = 0.8            # 点选间隔, 真机验证 0.8 s 可通过
+HINT_MIN_DARK = int(os.environ.get("CAP_HINT_MIN_DARK", "3"))   # Geetest 深色面板固定 3 个提示图
+TAP_MIN_DIST = float(os.environ.get("CAP_TAP_MIN_DIST", "48"))  # 两次点选的最小间距 (px)
+BADGE_CHECK = os.environ.get("CAP_BADGE_CHECK", "1") != "0"     # 半截编号圆标 -> 刷新
 ICON_MIN = float(os.environ.get("CAP_ICON_MIN", "0.60"))  # 图标匹配最低分, 低于则刷新
 # 补充放行门槛: 有一项匹配极好 + 没有明显错的项时, 不再被均值下限误杀。
 # 依据 .agent/fixtures 实测: 7 张正样本的最高分均 >= 0.911; 唯一「已点过、
@@ -600,17 +607,72 @@ def icon_scores_ok(scores):
     return max(scores) >= ICON_STRONG and min(scores) >= ICON_FLOOR
 
 
+def photo_sig(img, d):
+    """图片区域的低分辨率指纹: 判断刷新后厂商是否真的换了题 (而不是还停在旧图/加载帧)。"""
+    p = d.get("photo")
+    if not p:
+        return None
+    x0, y0, x1, y1 = p
+    a = img[y0:y1:16, x0:x1:16]
+    return a.astype(np.int16) if a.size else None
+
+
+def has_badge(img, photo):
+    """图上是否已有编号圆标 (白心 + 蓝环) —— 即「点到一半」的残局。
+    Geetest 每次点选都会在图上盖一个编号圆标, 它会被 icon_candidates 当成纯色图标,
+    继续规划只会点到圆标或重复点; 正确做法是刷新换一张新图重新开始。
+    只认高对比蓝环 (实测真机圆标 ring 占比 0.47~0.55, 彩色图标 <0.15), 避免误伤。"""
+    x0, y0, x1, y1 = photo
+    R = img[y0:y1:2, x0:x1:2].astype(np.int16)
+    if R.size == 0:
+        return False
+    r, g, b = R[..., 0], R[..., 1], R[..., 2]
+    white = (R.min(2) > 190) & (R.max(2) - R.min(2) < 45)
+    blue = (b - r > 35) & (b > 110) & (g > 70)
+    lab, boxes = components(dilate(white, 1))
+    for L, (bx0, by0, bx1, by1, area) in enumerate(boxes, 1):
+        w, h = (bx1 - bx0) * 2, (by1 - by0) * 2
+        if not (40 <= w <= 120 and 40 <= h <= 120 and 0.65 < w / h < 1.45):
+            continue
+        a0, b0 = max(0, bx0 - 3), max(0, by0 - 3)
+        a1, b1 = min(lab.shape[1], bx1 + 3), min(lab.shape[0], by1 + 3)
+        ring = blue[b0:b1, a0:a1] & (lab[b0:b1, a0:a1] != L)
+        if ring.size and ring.mean() > 0.35:
+            return True
+    return False
+
+
+def dedup_candidates(cands, min_dist):
+    """同一图标被两种相近颜色切成两个候选时, 只留笔画面积大的那个。
+    否则 best 排列可能把两个提示指到同一个位置: 连点两下会被厂商当成撤销/重复,
+    真机上就表现为「只标了 1 或 2 个图标」然后停住。"""
+    out = []
+    for c in sorted(cands, key=lambda t: -t[4]):
+        if all(abs(c[1][0] - o[1][0]) + abs(c[1][1] - o[1][1]) >= min_dist for o in out):
+            out.append(c)
+    return out
+
+
 def plan_icon(img, d):
     hints = split_hint(img, d["hint"])
     darkp = panel_color(img, d["modal"]).mean() < 95
-    cands = icon_candidates(img, d["photo"], sd_max=16 if darkp else 10)
-    if not hints or len(cands) < len(hints):
-        # 图标分割没凑够数: 旧版直接判 "不是验证码" 并立刻 return skip,
-        # 一下不点、不刷新、不重试 —— 但真机上 Geetest 暗色面板常有一两个图标
-        # 因半透明/遮挡漏检 (日志: hints=3 cands=2)。这属于「这一帧没看清」,
-        # 不是「这不是验证码」。标 weak 交给 solve() 刷新换图重试; 只有连一个
-        # 纯色图标都没有且刷新多次仍如此, 才由 solve() 最终按 skip 收尾。
-        return None, {"hints": len(hints), "cands": len(cands), "weak": True}
+    photo = d["photo"]
+    pw, ph = photo[2] - photo[0], photo[3] - photo[1]
+    # 深色图片上沿是大片暗色时 find_photo 只框到下半张 (真机 14:03: 980x448
+    # 而不是 980x652), 顶部图标必然漏检。这种帧不能点残缺序列 -> 刷新换图。
+    if darkp and ph < 0.58 * pw:
+        return None, {"hints": len(hints), "cands": 0, "weak": True, "reason": "photo_truncated"}
+    # 已有编号圆标 = 点到一半的残局 (真机 14:39 截图: 标了 1、2 就停住)。
+    if darkp and BADGE_CHECK and has_badge(img, photo):
+        return None, {"hints": len(hints), "cands": 0, "weak": True, "reason": "already_clicked"}
+    # 深色 Geetest 固定 3 个提示图; 只切出 1~2 个时点了也是残缺序列。
+    minh = HINT_MIN_DARK if darkp else 2
+    if len(hints) < minh:
+        return None, {"hints": len(hints), "cands": 0, "weak": True, "reason": "hints_short"}
+    cands = dedup_candidates(icon_candidates(img, photo, sd_max=16 if darkp else 10), TAP_MIN_DIST)
+    if len(cands) < len(hints):
+        # 图标没凑够数: 「这一帧没看清」而不是「不是验证码」 -> 刷新换图重试。
+        return None, {"hints": len(hints), "cands": len(cands), "weak": True, "reason": "cands_short"}
     hp = [polar(m) for m, _ in hints]
     cp = [polar(c[0]) for c in cands]
     Sm = np.array([[polar_sim(a, b) for b in cp] for a in hp])
@@ -621,8 +683,15 @@ def plan_icon(img, d):
     # 单项下限 + 均值下限: 已点过的图(带编号圆标, fixtures/13_clicked)均值只有 ~0.67, 不能再点。
     # 补充放行规则与 fixtures 依据见 icon_scores_ok()。
     if not icon_scores_ok(scores):
+        info.update(weak=True, reason="low_scores")
         return None, info
-    return [cands[j][1] for j in best], info
+    pts = [cands[j][1] for j in best]
+    for i in range(len(pts)):
+        for j in range(i + 1, len(pts)):
+            if abs(pts[i][0] - pts[j][0]) + abs(pts[i][1] - pts[j][1]) < TAP_MIN_DIST:
+                info.update(weak=True, reason="duplicate_taps")
+                return None, info
+    return pts, info
 
 
 # ---------------- 文字点选 (可选 ddddocr, 懒加载) ----------------
@@ -821,14 +890,17 @@ class Session:
         except (OSError, ValueError):
             pass
 
-    def refresh(self, d):
-        if not d.get("refresh"):
+    def refresh(self, btn, before_sig=None):
+        """点刷新钮并等到厂商真的换了新题再交回。
+        btn 由调用方给: 深色页脚的形状检测偶尔选不出唯一刷新钮, 这时复用上一帧
+        记住的坐标 (位置固定), 旧版直接 return False 就一下都不刷新了。"""
+        if not btn:
             return False
         wait = REFRESH_GAP - (time.time() - self.last_refresh)
         if wait > 0:
             time.sleep(wait)
-        log("refresh tap %s" % (d["refresh"],))
-        tap(*d["refresh"])
+        log("refresh tap %s" % (btn,))
+        tap(*btn)
         self.last_refresh = time.time()
         if STAMP:
             try:
@@ -837,103 +909,129 @@ class Session:
             except OSError:
                 pass
         time.sleep(1.5)
-        # 刷新后厂商会重新出题, 中间有一两秒空白/加载帧。若让调用方立刻
-        # detect 到 none 就判「已消失」, 换图过程会被当成成功 (真机 14:04:
-        # refresh tap -> replay: solved gone -> V2_SLEEP 锁屏)。等新题出现再交回,
-        # 固定次数轮询而不依赖墙上时钟 (单元测试里 time.time 是打桩的)。
-        for _ in range(8):
+        # 换图中间有一两秒空白/加载帧, 甚至旧题还没被替换。必须等「结构在且图片
+        # 内容真的变了」才回去规划, 否则会拿旧图再点一遍 / 把空白帧当成功。
+        for _ in range(10):
             time.sleep(0.5)
             try:
-                if detect(capture())["kind"] != "none":
+                im = capture()
+                dd = detect(im)
+                if dd["kind"] == "none":
+                    continue
+                sig = photo_sig(im, dd)
+                if before_sig is None or sig is None or sig.shape != before_sig.shape \
+                        or np.abs(sig - before_sig).mean() > 12:
                     break
             except Exception:
                 pass
         return True
 
     def solve(self, d):
-        """求解已检测到的验证码 -> (status, 说明)。
-        status: solved | fail (解不出 / 厂商锁) | skip (不是验证码或不支持, 继续流程)。"""
-        kind = d["kind"]
-        acted = False     # 动过手 (点过/滑过/刷新过): 之后画面消失算解出
-        tapped = False    # 真正对验证码注入过求解输入 (不含刷新)
-        weak = 0          # 图标没看清的帧数: 累计到上限仍没点成 -> 才承认不是验证码
-        for attempt in range(REFRESH_MAX + 1):
+        """持续求解: 直到验证码真的消失才返回 solved, 否则一路刷新换图重试。
+        status: solved | fail (预算/次数用尽或厂商锁不退) | skip (不是验证码或不支持)。
+        图标没凑齐、分数不够、点到一半、答错 -> 都不点残缺序列, 一律换图重来;
+        只有「真正提交过 + 连续两帧无验证码」才算成功, 换图空白帧绝不算。"""
+        deadline = time.time() + SOLVE_BUDGET
+        last_refresh = d.get("refresh")
+        last_confirm = d.get("confirm")
+        refreshes = 0
+        locks = 0
+        tapped = False
+        attempt = 0
+        while attempt < REFRESH_MAX + 1 and time.time() < deadline:
+            attempt += 1
             t0 = time.time()
             img = capture()
             d = detect(img)
+            if d.get("refresh"):
+                last_refresh = d["refresh"]
+            if d.get("confirm"):
+                last_confirm = d["confirm"]
             if d["kind"] == "locked":
-                return "fail", "locked: vendor 'too many attempts' dialog"
+                locks += 1
+                if locks > LOCK_MAX:
+                    return "fail", "vendor lock persists after %d cooldowns" % (locks - 1)
+                log("vendor 'too many attempts' lock, cool down %.0f s then retry (%d/%d)" %
+                    (LOCK_WAIT, locks, LOCK_MAX))
+                time.sleep(LOCK_WAIT)
+                if last_refresh:
+                    tap(*last_refresh)
+                continue
             if d["kind"] == "none":
-                # 只有真正提交过点选/滑块才能算解出。旧版用 acted (刷新也算),
-                # 「刷新后换图加载帧」被 detect 成 none 就报 solved gone,
-                # 回放据此 V2_OK -> 杀后台 -> 锁屏, 而验证码其实还没解开。
+                # 换图/关闭动画的单帧空白不算结束 (真机曾因此 solved gone -> 提前锁屏)
+                time.sleep(0.6)
+                if detect(capture())["kind"] != "none":
+                    continue
                 if tapped:
                     return "solved", "gone"
-                if acted:
-                    return "fail", "vanished after refresh without a submit"
-                return "skip", "gone before solving"
+                return "skip", "gone with no submit" if refreshes else "gone before solving"
             kind = d["kind"]
             if kind == "slider":
-                acted = True
                 tapped = True
                 ok, why = self.slide(img, d)
-                log("slider attempt %d: %s" % (attempt + 1, why))
+                log("slider attempt %d: %s" % (attempt, why))
                 if ok is True:
-                    return "solved", "slider (attempt %d)" % (attempt + 1)
+                    return "solved", "slider (attempt %d)" % attempt
                 if ok == "fail":
                     return "fail", why
             else:
                 pts, info = plan_icon(img, d) if kind == "icon" else plan_word(img, d)
-                log("%s plan %s pts=%s (%.0f ms)" % (kind, json.dumps(info, ensure_ascii=False), pts, (time.time() - t0) * 1000))
+                log("%s plan %s pts=%s (%.0f ms)" %
+                    (kind, json.dumps(info, ensure_ascii=False), pts, (time.time() - t0) * 1000))
                 if info.get("unsupported"):
                     return "skip", "unsupported:%s(%s)" % (kind, info["unsupported"])
-                if info.get("not_captcha") and not acted:
-                    # word: OCR 题头没有「依次点击」句式 -> 确实是普通弹窗, 一下都不点也不刷新
+                if info.get("not_captcha") and not tapped:
+                    # word: 题头没有「依次点击」句式 -> 普通弹窗, 一下都不点也不刷新
                     return "skip", "%s: not a captcha (%s)" % (kind, ",".join(sorted(k for k in info if k != "not_captcha")))
                 if info.get("weak"):
-                    # icon: 这一帧没看全图标 -> 不放弃, 走下面的刷新换图重试
-                    weak += 1
-                    log("%s: %s icons for %s hints (weak frame %d), refresh & retry" %
-                        (kind, info.get("cands", 0), info.get("hints", 0), weak))
+                    reason = info.get("reason", "icons unresolved")
+                    log("%s: %s (%d icons / %d hints) -> refresh, no partial taps" %
+                        (kind, reason, info.get("cands", 0), info.get("hints", 0)))
                 if pts:
-                    acted = True
-                    tapped = True
                     for (x, y) in pts:
                         tap(x, y)
                         time.sleep(TAP_GAP)
-                    if d.get("confirm"):
-                        tap(*d["confirm"])
-                    res = self.gone(3.0)
+                    btn = d.get("confirm") or last_confirm
+                    if btn:
+                        tap(*btn)
+                    tapped = True
+                    res = self.gone(GONE_WAIT)
                     if res is True:
-                        return "solved", "%s (attempt %d)" % (kind, attempt + 1)
+                        return "solved", "%s (attempt %d)" % (kind, attempt)
                     if res:
-                        return "fail", res
-                    log("%s: still present after submit" % kind)
-            if attempt < REFRESH_MAX:
-                time.sleep(1.0)
-                img2 = capture()
-                d2 = detect(img2)
-                if d2["kind"] == "locked":
-                    return "fail", "locked: vendor 'too many attempts' dialog"
-                if d2["kind"] == "none":
+                        # 提交后弹出厂商锁: 冷却再战, 不直接判失败
+                        locks += 1
+                        log("submit: %s -> cool down (%d/%d)" % (res, locks, LOCK_MAX))
+                        if locks > LOCK_MAX:
+                            return "fail", "vendor lock persists after submit"
+                        time.sleep(LOCK_WAIT)
+                        if last_refresh:
+                            tap(*last_refresh)
+                        continue
+                    log("%s: still present after submit, refresh & retry" % kind)
+            if attempt > REFRESH_MAX or time.time() >= deadline:
+                break
+            # 提交/放弃后先确认不是「慢一拍的成功」; 仍在就一律换图 ——
+            # 带编号圆标、错误提示或答错的旧题绝不能拿来继续点。
+            time.sleep(1.0)
+            img2 = capture()
+            d2 = detect(img2)
+            if d2["kind"] == "locked":
+                continue                      # 下一轮循环顶部按厂商锁冷却处理, 别在锁弹窗上乱点
+            if d2["kind"] == "none":
+                time.sleep(0.6)
+                if detect(capture())["kind"] == "none":
                     if tapped:
                         return "solved", "gone"
-                    if acted:
-                        return "fail", "vanished after refresh without a submit"
-                    return "skip", "gone"
-                x0, y0, x1, y1 = d["photo"]
-                changed = d2.get("photo") == d["photo"] and \
-                    np.abs(img2[y0:y1:8, x0:x1:8].astype(np.int16) - img[y0:y1:8, x0:x1:8]).mean() > 25
-                if changed:
-                    log("picture already replaced by the vendor, no refresh tap")
-                else:
-                    acted = True
-                    if not self.refresh(d2):
-                        time.sleep(REFRESH_GAP)   # 无刷新钮: 多数厂商失败后自动换图
-        if weak and not tapped:
-            # 刷新换图多次仍认不出图标: 这才承认「不是图标验证码」, 让回放继续而不是卡死
-            return "skip", "%s: not a captcha (icons unresolved after %d refreshes)" % (kind, REFRESH_MAX)
-        return "fail", "unsolved:%s after %d refreshes" % (kind, REFRESH_MAX)
+                    continue
+            btn = d2.get("refresh") or last_refresh
+            before = photo_sig(img2, d2)
+            if before is None:
+                before = photo_sig(img, d)
+            refreshes += 1
+            if not self.refresh(btn, before):
+                time.sleep(REFRESH_GAP)   # 连缓存坐标都没有: 等厂商自动换图
+        return "fail", "unsolved after %d refreshes / %d attempts" % (refreshes, attempt)
 
     def gone(self, wait):
         """提交后: True = 验证码消失(含无图成功确认弹窗); False = 还在; 字符串 = 失败原因 (厂商锁)。"""
@@ -1077,10 +1175,7 @@ def record_loop(ses, flag, idle):
                 continue
             open(flag, "w").close()
             log("record: %s detected, recording paused" % d["kind"])
-            if d["kind"] == "locked":
-                st, why = "fail", "vendor lock dialog (not solvable)"
-            else:
-                st, why = ses.solve(d)
+            st, why = ses.solve(d)
             log("record: %s %s" % (st, why))
             if st in ("solved", "fail"):
                 # 真的动过手(或被厂商锁)才等画面消失; 25 s 硬超时绝不让录制永久停摆
@@ -1137,10 +1232,9 @@ def worker(mode, owner, fin, fout, flag):
                     d = detect(capture())
                     if d["kind"] == "none":
                         st, why = "none", "-"
-                    elif d["kind"] == "locked":
-                        st, why = "fail", "locked: vendor 'too many attempts' dialog on screen"
-                        log("replay: %s" % why)
                     else:
+                        # 厂商「尝试过多」锁也交给 solve(): 它会冷却后继续换图重试,
+                        # 旧版在这里直接判 fail, 回放立刻 rc=4 收工。
                         log("replay: %s captcha detected" % d["kind"])
                         st, why = ses.solve(d)
                         log("replay: %s %s" % (st, why))

@@ -82,8 +82,9 @@ cap_check() {
   fi
   echo check >&7
   CAP_RES=
-  # 一次求解最多 3 张图 x (点选+刷新间隔), 150 s 足够; 超时说明 worker 卡死, 当作解不出
-  if ! read -t 150 -r CAP_RES <&8; then
+  # 一次求解会持续换图重试 (默认最多 8 次刷新 + 厂商锁冷却), 300 s 足够;
+  # 超时说明 worker 卡死, 当作解不出 -> rc=4 -> 保留画面不锁屏。
+  if ! read -t 300 -r CAP_RES <&8; then
     echo "$(date +%m%d-%H%M) CAPTCHA_FAIL timeout" >> "$CAP_LOGF"
     cap_stop
     return 1
