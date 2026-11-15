@@ -460,6 +460,20 @@ _daemon() {
   echo "$STAY0" > $BASE/rec.stayon 2>/dev/null
   chmod 600 $BASE/rec.stayon 2>/dev/null
   svc power stayon true 2>/dev/null
+  # 「开始录制」是在 KSU WebUI 里点的, 那个界面本身就占着前台。旧包不强制等目标
+  # app, 新版 READY=0 就什么都不录 (验证码 worker 还退避到 3 s 一次), 手动切 app
+  # 稍慢或没切成就表现为「识别不到 app / 完全不工作」。这里由 daemon 自己把目标
+  # app 拉到前台: 后面的 LAST_FG/READY 会直接命中, 不再依赖用户手动切换。
+  # 全场录取 (PKG 为空) 不受影响; 拉起失败只记日志, 仍可手动切过去。
+  if [ -n "$PKG" ]; then
+    AUTO_FG=$(fg_pkg)
+    if [ "$AUTO_FG" != "$PKG" ]; then
+      log "AUTO_OPEN 目标app<$PKG>不在前台(当前<${AUTO_FG}>), 自动拉起"
+      monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
+      sleep 2
+      log "AUTO_OPEN 拉起后前台=<$(fg_pkg)>"
+    fi
+  fi
   # 验证码: 录制期间起一个 worker 每 ~0.7 s 截屏检测, 发现就建 $CAP_FLAG 并自动求解,
   # 消失后删标志。worker 与本 daemon 同进程组, stop 的 kill -9 -PGID 会一并带走它。
   CAP_PID=; CAP_FLAG=$BASE/captcha.on; CAP_PAUSE=0
