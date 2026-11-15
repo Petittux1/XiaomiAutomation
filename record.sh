@@ -419,6 +419,15 @@ start() {
   LOGN0=0
   [ -f "$LOG" ] && LOGN0=$(wc -l < "$LOG" 2>/dev/null)
   setsid sh $M/record.sh _daemon $N </dev/null >>$LOG 2>&1 &
+  REC_PID=$!
+  # Android 12+ 会 freeze 退到后台的 App 整个 cgroup。WebUI 一点「开始录制」,
+  # 这个 daemon、它派生的 getevent、以及验证码 worker 都继承 resukisu 的 cgroup;
+  # 用户切到目标 App 的瞬间三者全被冻住 -> 手势录不到、图标点一半停住、确定不点。
+  # 在 spawn 处立刻挪到根 cgroup (builtin 一次写完, 不派生子进程), 子进程自动继承。
+  if [ -w /sys/fs/cgroup/cgroup.procs ]; then
+    echo "$REC_PID" > /sys/fs/cgroup/cgroup.procs 2>/dev/null &&
+      log "CGROUP_ESCAPE daemon pid=$REC_PID -> / (app freezer)"
+  fi
   sleep 1
   if [ -f $PIDF ] && kill -0 $(cat $PIDF 2>/dev/null) 2>/dev/null; then
     log "REC_START $N"
@@ -438,6 +447,8 @@ start() {
 # ---------- 后端 ----------
 _daemon() {
   N=$1
+  # 兜底: 从 adb / 其它入口直接起 daemon 时, 上面的 spawn 转义没跑过。
+  [ -f "$M/cgroup_escape.sh" ] && sh "$M/cgroup_escape.sh" "$$" 2>/dev/null
   echo $$ > $PIDF
   echo "$N" > $NAME
   CDIR=$PFX/$N

@@ -24,7 +24,7 @@ CACHE_TAG="v${VC}"
 rm -f "$OUT"
 mkdir -p "$STAGE/tools" "$STAGE/webroot" "$STAGE/captcha/shim"
 cp "$ROOT"/module.prop "$ROOT"/service.sh "$ROOT"/water.sh "$ROOT"/record.sh "$ROOT"/replay.sh \
-   "$ROOT"/webctl.sh "$ROOT"/sched.conf "$ROOT"/device.conf "$ROOT"/customize.sh \
+   "$ROOT"/webctl.sh "$ROOT"/cgroup_escape.sh "$ROOT"/sched.conf "$ROOT"/device.conf "$ROOT"/customize.sh \
    "$ROOT"/config.json \
    "$ROOT"/README.md "$ROOT"/README.en.md "$ROOT"/README.fr.md "$ROOT"/README.ru.md \
    "$ROOT"/LICENSE "$ROOT"/.gitignore "$STAGE/"
@@ -110,7 +110,7 @@ chmod 755 "$STAGE"/service.sh "$STAGE"/water.sh "$STAGE"/record.sh "$STAGE"/repl
   "$STAGE"/webctl.sh "$STAGE"/customize.sh "$STAGE"/tools/run_once.sh
 chmod 644 "$STAGE"/module.prop "$STAGE"/sched.conf "$STAGE"/device.conf \
   "$STAGE"/README.md "$STAGE"/README.en.md "$STAGE"/README.fr.md "$STAGE"/README.ru.md \
-  "$STAGE"/LICENSE \
+  "$STAGE"/LICENSE "$STAGE"/cgroup_escape.sh \
   "$STAGE"/.gitignore "$STAGE"/tools/px.py "$STAGE"/webroot/* \
   "$STAGE"/captcha/capsolve.py "$STAGE"/captcha/captcha.sh "$STAGE"/captcha/shim/cv2.py
 
@@ -118,16 +118,40 @@ chmod 644 "$STAGE"/module.prop "$STAGE"/sched.conf "$STAGE"/device.conf \
 # 在暂存目录统一去掉 \r (全部是文本文件, 无二进制)。
 find "$STAGE" -type f -exec sh -c 'tr -d "\r" < "$1" > "$1.lf" && mv "$1.lf" "$1"' _ {} \;
 
-(cd "$STAGE" && zip -qr "$OUT" .)
+# Windows 的 Git Bash 经常没有 Info-ZIP; 没装 zip/unzip 时用 Python stdlib 兜底,
+# 保留 POSIX 权限位 (KSU 安装器按 zip 外部属性恢复 755/644)。
+if command -v zip >/dev/null 2>&1; then
+  (cd "$STAGE" && zip -qr "$OUT" .)
+else
+  python - "$STAGE" "$OUT" <<'PY'
+import os, sys, zipfile
+root, out = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+    for base, dirs, files in os.walk(root):
+        for name in sorted(files):
+            p = os.path.join(base, name)
+            rel = os.path.relpath(p, root).replace(os.sep, "/")
+            zi = zipfile.ZipInfo(rel)
+            zi.compress_type = zipfile.ZIP_DEFLATED
+            zi.external_attr = (os.stat(p).st_mode & 0xFFFF) << 16
+            with open(p, "rb") as f:
+                z.writestr(zi, f.read())
+PY
+fi
 
 # ---------- 产物自检 ----------
 # 少一个文件, 装上去就要么白屏、要么设备档案初始化不出来, 所以在这里拦住。
-for f in module.prop service.sh water.sh record.sh replay.sh webctl.sh \
+if command -v unzip >/dev/null 2>&1; then
+  ZIPLIST=$(unzip -Z1 "$OUT")
+else
+  ZIPLIST=$(python -c "import sys,zipfile; print('\n'.join(zipfile.ZipFile(sys.argv[1]).namelist()))" "$OUT")
+fi
+for f in module.prop service.sh water.sh record.sh replay.sh webctl.sh cgroup_escape.sh \
          sched.conf device.conf customize.sh config.json \
          README.md README.en.md README.fr.md README.ru.md \
          webroot/index.html webroot/app.js webroot/i18n.js webroot/kernelsu.js \
          captcha/capsolve.py captcha/captcha.sh captcha/shim/cv2.py; do
-  unzip -l "$OUT" | grep -qF " $f" || { echo "构建失败: 产物缺少 $f" >&2; exit 1; }
+  printf '%s\n' "$ZIPLIST" | grep -qxF "$f" || { echo "构建失败: 产物缺少 $f" >&2; exit 1; }
 done
 # 设备档案模板必须是「不覆盖」状态: 装了包的新用户不该一上来就被别的机型参数接管。
 grep -qE '^DEV_APPLY=0$' "$STAGE/device.conf" || {

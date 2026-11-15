@@ -25,6 +25,7 @@ if [ ! -f $CFG ]; then
 fi
 chmod 600 $CFG 2>/dev/null
 chmod 755 $MODDIR/service.sh $MODDIR/water.sh $MODDIR/webctl.sh $MODDIR/record.sh $MODDIR/replay.sh 2>/dev/null
+chmod 644 $MODDIR/cgroup_escape.sh 2>/dev/null
 
 # 设备档案: 只在缺失时用模块内的模板初始化一次。
 # 关键: 已存在的 device.conf 绝不覆盖 —— 用户在 WebUI 里选好的机型不能在升级时丢。

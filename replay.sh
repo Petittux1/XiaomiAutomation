@@ -7,6 +7,8 @@ BASE=/data/adb/icbc_water
 PFX=$BASE/profiles
 LOGF=$M/log.txt
 [ -n "$2" ] && LOGF=$2
+# 「立即运行」也可能从 WebUI 发起: 别让回放继承会被冻结的 App cgroup。
+[ -f "$M/cgroup_escape.sh" ] && sh "$M/cgroup_escape.sh" "$$" 2>/dev/null
 
 # ---------- 设备/注入原语 (与 service.sh 同源, 缩放 K 与 record.sh 一致) ----------
 # ---- TDEV_DISC_BEGIN 触摸设备发现 (四份拷贝必须逐字一致, 回归第 11 节比对) ----

@@ -66,6 +66,8 @@ cap_start() {
       "$CAP_PY" -I -S -B -X utf8 "$M/captcha/capsolve.py" worker "$CAP_MODE" $$ "$CAP_IN" "$CAP_OUT" "$CAP_FLAG" \
       </dev/null >/dev/null 2>>"$CAP_LOGF" &
   CAP_PID=$!
+  # worker 也不能留在 WebUI 的 App cgroup 里: 冻结后图标点一半就停、确定与刷新都不点。
+  [ -f "$M/cgroup_escape.sh" ] && sh "$M/cgroup_escape.sh" "$CAP_PID" 2>/dev/null
   if [ "$CAP_MODE" = "replay" ]; then
     # 读写方式打开 FIFO 不会阻塞, 也保证 worker 那端永远有对端 (不会读到 EOF)
     exec 7<>"$CAP_IN" 8<>"$CAP_OUT"

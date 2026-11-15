@@ -998,7 +998,15 @@ trap 'service_term' 1 2 15
 ensure_profiles
 N=0
 AL=0
+CG_TICK=0
 while true; do
+  # 兜底扫描 (每 ~10 s): 任何从 WebUI / adb 派生却仍留在被冻结 App cgroup 里的
+  # 本模块进程, 一律挪到根 cgroup。service.sh 本身在根 cgroup, 不会被冻住。
+  CG_TICK=$((CG_TICK+1))
+  if [ $CG_TICK -ge 5 ]; then
+    CG_TICK=0
+    [ -f "$M/cgroup_escape.sh" ] && sh "$M/cgroup_escape.sh" --scan 2>/dev/null
+  fi
   # 配置热加载: WebUI 保存后 2 秒内生效, 不再需要重启服务
   [ -f $CFG ] && . $CFG 2>/dev/null
   T=$(date +%Y%m%d)

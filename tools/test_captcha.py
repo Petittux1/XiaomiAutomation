@@ -489,5 +489,117 @@ st_s, why_s, taps_s, _ = _retry_run(_swap_frames)
 check(st_s == "fail" and taps_s >= 9,
       "vendor swap blank frames are NOT reported as solved (%d icon taps) -> %s" % (taps_s, why_s))
 
+# ---------- 2b. App cgroup 冻结 / 确定按钮 / 点选逐次核对 ----------
+# 真机 16:34 的 worker 停在 do_freezer_trap: WebUI 退到后台后整个 cgroup 被冻住,
+# 图标点 1~2 个就再也不动、确定不点、刷新不点; 手动解冻后 16:44 立刻
+# "solved icon (attempt 3)"。以下单测钉住代码里对应的三条护栏。
+_stuck = C.load(os.path.join(FX, "geetest_stuck_1.jpg"))
+_d0 = C.detect(_stuck)
+check(len(C.badge_centers(_stuck, _d0["photo"])) == 2,
+      "badge_centers: real Geetest frame with 2 numbered markers -> %s" %
+      (C.badge_centers(_stuck, _d0["photo"]),))
+_counts = []
+for _f in ("geetest_stuck_2.jpg", "geetest_stuck_3.jpg"):
+    _im = C.load(os.path.join(FX, _f))
+    _counts.append(len(C.badge_centers(_im, C.detect(_im)["photo"])))
+check(_counts == [2, 1],
+      "badge_centers: 14:04 / 14:39 real partial frames -> %s (expected [2,1])" % (_counts,))
+check(C.has_badge(_stuck, _d0["photo"]) is True and
+      len(C.badge_centers(C.load(os.path.join(FX, "xmsq_icon_13.png")),
+                          C.detect(C.load(os.path.join(FX, "xmsq_icon_13.png")))["photo"])) == 0,
+      "badge_centers: fresh light-panel captcha has no numbered markers")
+
+# 确定钮这一帧没认出来时, 必须重抓/按几何兜底, 绝不能静默跳过提交。
+_saved = (C.capture, C.detect, C.log)
+_noconf = {k: v for k, v in _d0.items() if k != "confirm"}
+C.capture = lambda: _stuck
+C.detect = lambda img: _noconf
+C.log = lambda *a, **k: None
+try:
+    _fb = C.Session().confirm_button(_noconf, None)
+finally:
+    (C.capture, C.detect, C.log) = _saved
+check(near(_fb, [610, 1828], 30),
+      "confirm_button: dark panel geometry fallback -> %s (expected ~[610,1828])" % (_fb,))
+
+
+def _frozen_wall_clock():
+    """墙上时钟在第一次点击后暴涨 (模拟 cgroup 冻结几分钟)。solve() 必须用
+    单调时钟计预算, 否则解冻后立刻 'unsolved after 1 attempts' 收工。"""
+    taps, refs, clk, jumped = [], [], [1000.0], [False]
+    saved = (C.time.time, C.time.sleep, C.capture, C.detect, C.plan_icon,
+             C.photo_sig, C.log, C.tap, C.Session.refresh, C.Session.gone)
+    C.time.time = lambda: clk[0] + (100000 if jumped[0] else 0)
+    C.time.sleep = lambda s: clk.__setitem__(0, clk[0] + s)
+    C.capture = lambda: _blank
+    C.detect = lambda img: dict(_icon)
+    C.plan_icon = lambda img, d: ([(10, 10), (20, 20), (30, 30)], {"hints": 3, "cands": 3})
+    C.photo_sig = lambda img, d: "sig"
+    C.log = lambda *a, **k: None
+    C.tap = lambda x, y: (taps.append((x, y)), jumped.__setitem__(0, True)) and None
+    C.Session.refresh = lambda self, btn, before=None: (refs.append(btn), True)[1]
+    C.Session.gone = lambda self, wait: False
+    try:
+        st, why = C.Session().solve({"kind": "icon"}, refresh_max=3, budget=240)
+    finally:
+        (C.time.time, C.time.sleep, C.capture, C.detect, C.plan_icon,
+         C.photo_sig, C.log, C.tap, C.Session.refresh, C.Session.gone) = saved
+    return st, why, len(refs), len(taps)
+
+
+st_f, why_f, refs_f, taps_f = _frozen_wall_clock()
+check(refs_f >= 3 and taps_f >= 9,
+      "frozen wall clock does NOT burn the solve budget (%d refreshes / %d taps) -> %s" %
+      (refs_f, taps_f, why_f))
+
+# 深色面板逐次核对圆标: 两种边界都要守住 —— (A) 皮肤根本不画圆标时不能无限刷新,
+# (B) 前两下有圆标、第三下没有时必须放弃残缺序列, 不点确定。
+_dark = np.zeros((512, 512, 3), np.uint8)
+_dark[:] = (30, 34, 42)
+
+
+def _badge_run(seq):
+    """seq: 每次 badge_centers 调用返回的圆标个数 (含规划前的基线一次)。"""
+    saved = (C.time.time, C.time.sleep, C.capture, C.detect, C.plan_icon,
+             C.photo_sig, C.log, C.tap, C.Session.refresh, C.Session.gone, C.badge_centers)
+    clk, taps, refs, gones, calls = [1000.0], [], [], [0], [0]
+    C.time.time = lambda: clk[0]
+    C.time.sleep = lambda s: clk.__setitem__(0, clk[0] + s)
+    C.capture = lambda: _dark
+    C.detect = lambda img: {"kind": "icon", "modal": (0, 0, 512, 512),
+                            "photo": (0, 0, 256, 256), "refresh": (10, 10), "confirm": None}
+    def fake_plan(img, d):
+        calls[0] = 0            # 每轮尝试从基线重新数
+        return ([(10, 10), (20, 20), (30, 30)], {"hints": 3, "cands": 3})
+    C.plan_icon = fake_plan
+    C.photo_sig = lambda img, d: "sig"
+    C.log = lambda *a, **k: None
+    C.tap = lambda x, y: taps.append((x, y))
+    C.Session.refresh = lambda self, btn, before=None: (refs.append(btn), True)[1]
+    C.Session.gone = lambda self, wait: (gones.__setitem__(0, gones[0] + 1), False)[1]
+
+    def fake_bc(img, photo):
+        # 每轮尝试: 规划前基线 -> 三次点选之后各一次。
+        n = seq[min(calls[0], len(seq) - 1)]
+        calls[0] += 1
+        return [(0, 0)] * n
+
+    C.badge_centers = fake_bc
+    try:
+        st, why = C.Session().solve({"kind": "icon"}, refresh_max=2, budget=1000)
+    finally:
+        (C.time.time, C.time.sleep, C.capture, C.detect, C.plan_icon,
+         C.photo_sig, C.log, C.tap, C.Session.refresh, C.Session.gone, C.badge_centers) = saved
+    return len(taps), len(refs), gones[0], st
+
+t_a, r_a, g_a, _ = _badge_run([0] * 10)
+check(t_a >= 9 and g_a >= 1,
+      "no numbered markers on an unknown skin -> badge check disabled, submit normally "
+      "(taps=%d submits=%d)" % (t_a, g_a))
+t_b, r_b, g_b, _ = _badge_run([0, 1, 2, 2, 2, 2])
+check(t_b == 9 and r_b == 2 and g_b == 0,
+      "3rd tap not registered (badges stall at 2) -> discard partial selection, refresh, "
+      "NEVER tap confirm (taps=%d refreshes=%d submits=%d)" % (t_b, r_b, g_b))
+
 print("== %s" % ("ALL PASS" if fails == 0 else "%d FAIL" % fails))
 sys.exit(1 if fails else 0)

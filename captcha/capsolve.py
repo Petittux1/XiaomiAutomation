@@ -47,6 +47,26 @@ STAMP = os.environ.get("CAP_STAMP", "")   # 上次刷新时刻, 跨回放尝试�
 OWNER = 0                                 # worker 的主人 PID; 每次注入前确认它还活着
 
 
+def escape_app_cgroup():
+    """把自己挪出「会被 Android 冻结的 App cgroup」。
+
+    KSU WebUI 里点开始录制时, worker 继承 com.resukisu.resukisu 的
+    `0::/apps/uid_*/pid_*` cgroup。用户一切到目标 App, 系统就把整个 cgroup
+    freeze=1 (进程停在 do_freezer_trap): 图标点到 1~2 个就再也不动、确定不点、
+    刷新不点, 手动把 WebUI 切回前台解冻后才继续。根 cgroup `0::/` 不会被冻。
+    shell 侧在 spawn 时已经挪过一次, 这里是 worker 自己的兜底 (老机型无 cgroup
+    v2 / 权限不足时静默跳过)。"""
+    try:
+        with open("/proc/self/cgroup") as f:
+            v2 = [ln[3:].strip() for ln in f if ln.startswith("0::")]
+        if v2 and v2[0].startswith("/apps/"):
+            with open("/sys/fs/cgroup/cgroup.procs", "w") as f:
+                f.write("%d\n" % os.getpid())
+            log("escaped frozen app cgroup %s -> /" % v2[0])
+    except OSError:
+        pass
+
+
 class OwnerGone(SystemExit):
     pass
 
@@ -627,20 +647,41 @@ def photo_sig(img, d):
     return a.astype(np.int16) if a.size else None
 
 
-def has_badge(img, photo):
-    """图上是否已有编号圆标 (白心 + 蓝环) —— 即「点到一半」的残局。
-    Geetest 每次点选都会在图上盖一个编号圆标, 它会被 icon_candidates 当成纯色图标,
-    继续规划只会点到圆标或重复点; 正确做法是刷新换一张新图重新开始。
-    只认高对比蓝环 (实测真机圆标 ring 占比 0.47~0.55, 彩色图标 <0.15), 避免误伤。"""
+def badge_centers(img, photo):
+    """图上所有编号圆标 (蓝底白字 + 白环) 的中心, 全分辨率坐标。
+
+    Geetest 每收到一次点选就盖一个编号圆标; 数量就是「厂商实际收到了几次点击」。
+    主判据是**蓝色实心圆盘**: 真机三个残局帧里圆标都是 98x98 px、密度 0.70~0.74
+    的蓝盘, 而图片里的蓝色图标是空心描边 (密度低) 或尺寸不符。旧版只认「白心 +
+    蓝环」, 数字 1 的白色笔画太细会漏检 (14:39 帧只找到 1 个却实际有 2 个)。
+    再并上旧判据做兼容, 最后按中心距离去重。"""
     x0, y0, x1, y1 = photo
     R = img[y0:y1:2, x0:x1:2].astype(np.int16)
     if R.size == 0:
-        return False
+        return []
     r, g, b = R[..., 0], R[..., 1], R[..., 2]
+    out = []
+
+    def add(c):
+        if all(abs(c[0] - o[0]) + abs(c[1] - o[1]) >= 60 for o in out):
+            out.append(c)
+
+    # 主判据: 蓝色实心圆盘 (编号圆标的底色)
+    bluefill = (b - r > 60) & (b > 150) & (g > 90) & (r < 160)
+    _, boxes = components(bluefill)
+    for (bx0, by0, bx1, by1, area) in boxes:
+        w, h = (bx1 - bx0) * 2, (by1 - by0) * 2
+        if not (80 <= w <= 130 and 80 <= h <= 130 and 0.75 < w / h < 1.35):
+            continue
+        if area / float((bx1 - bx0) * (by1 - by0)) < 0.55:
+            continue
+        add((x0 + bx0 + bx1, y0 + by0 + by1))
+
+    # 兼容判据: 白心 + 高对比蓝环 (另一种皮肤 / 合成样本)
     white = (R.min(2) > 190) & (R.max(2) - R.min(2) < 45)
     blue = (b - r > 35) & (b > 110) & (g > 70)
-    lab, boxes = components(dilate(white, 1))
-    for L, (bx0, by0, bx1, by1, area) in enumerate(boxes, 1):
+    lab, wboxes = components(dilate(white, 1))
+    for L, (bx0, by0, bx1, by1, area) in enumerate(wboxes, 1):
         w, h = (bx1 - bx0) * 2, (by1 - by0) * 2
         if not (40 <= w <= 120 and 40 <= h <= 120 and 0.65 < w / h < 1.45):
             continue
@@ -648,8 +689,13 @@ def has_badge(img, photo):
         a1, b1 = min(lab.shape[1], bx1 + 3), min(lab.shape[0], by1 + 3)
         ring = blue[b0:b1, a0:a1] & (lab[b0:b1, a0:a1] != L)
         if ring.size and ring.mean() > 0.35:
-            return True
-    return False
+            add((x0 + bx0 + bx1, y0 + by0 + by1))
+    return out
+
+
+def has_badge(img, photo):
+    """是否已有编号圆标 —— 即「点到一半」的残局, 必须刷新换图重新开始。"""
+    return bool(badge_centers(img, photo))
 
 
 def dedup_candidates(cands, min_dist):
@@ -900,6 +946,35 @@ class Session:
         except (OSError, ValueError):
             pass
 
+    def confirm_button(self, d, last):
+        """确定钮坐标: 本帧 -> 记忆 -> 重抓一帧 -> 深色面板的几何兜底。
+
+        用户反复报「不自动点确定」。深色 Geetest 的确认条有时颜色偏暗 / 正在做
+        启用动画, find_buttons 这一帧可能认不出; 旧代码 `if btn: tap(*btn)` 就
+        静默跳过提交, 图标标好了却永远停在原地。这里绝不静默跳过。"""
+        btn = d.get("confirm") or last
+        if btn:
+            return btn
+        if not d.get("modal"):
+            return None
+        try:
+            im2 = capture()
+            d2 = detect(im2)
+            if d2.get("confirm"):
+                log("icon: confirm button found on fresh frame %s" % (d2["confirm"],))
+                return d2["confirm"]
+            m = d2.get("modal") or d["modal"]
+            p = d2.get("photo") or d.get("photo")
+            if m and p and m[3] > p[3]:
+                # 深色面板: 图片下方居中一条宽蓝条, 中心约在「图片底 -> 面板底」的 27% 处。
+                # 真机 1220x2656: photo 底 1716 / 面板底 2124 -> 计算 y=1826, 实测 1828。
+                fb = ((m[0] + m[2]) // 2, p[3] + int(0.27 * (m[3] - p[3])))
+                log("icon: confirm button by geometry %s" % (fb,))
+                return fb
+        except Exception as e:
+            log("icon: confirm lookup failed %s" % type(e).__name__)
+        return None
+
     def refresh(self, btn, before_sig=None):
         """点刷新钮并等到厂商真的换了新题再交回。
         btn 由调用方给: 深色页脚的形状检测偶尔选不出唯一刷新钮, 这时复用上一帧
@@ -942,16 +1017,18 @@ class Session:
         status: solved | fail (预算/次数用尽或厂商锁不退) | skip (不是验证码或不支持)。
         图标没凑齐、分数不够、点到一半、答错 -> 都不点残缺序列, 一律换图重来;
         只有「真正提交过 + 连续两帧无验证码」才算成功, 换图空白帧绝不算。
-        refresh_max/budget 供录制模式传短预算, 回放默认用全局 8 次 / 240 s。"""
+        refresh_max/budget 可由调用方覆盖 (录制默认与回放一致); 预算按单调时钟计。"""
         rmax = REFRESH_MAX if refresh_max is None else refresh_max
-        deadline = time.time() + (SOLVE_BUDGET if budget is None else budget)
+        # 用单调时钟: 进程若被 App freezer 冻住几分钟, 墙上时钟会白白烧掉预算,
+        # 解冻后立刻判 "unsolved after 1 attempts"。单调时钟在冻结期间不推进。
+        deadline = time.monotonic() + (SOLVE_BUDGET if budget is None else budget)
         last_refresh = d.get("refresh")
         last_confirm = d.get("confirm")
         refreshes = 0
         locks = 0
         tapped = False
         attempt = 0
-        while attempt < rmax + 1 and time.time() < deadline:
+        while attempt < rmax + 1 and time.monotonic() < deadline:
             attempt += 1
             t0 = time.time()
             img = capture()
@@ -1001,28 +1078,66 @@ class Session:
                     log("%s: %s (%d icons / %d hints) -> refresh, no partial taps" %
                         (kind, reason, info.get("cands", 0), info.get("hints", 0)))
                 if pts:
-                    for (x, y) in pts:
+                    # 深色 Geetest 每收到一次点选就盖一个编号圆标。逐次核对圆标数:
+                    # 少了就说明这一下没被厂商接收 (进程被冻结 / 动画未就绪 / 点歪),
+                    # 绝不带着残缺序列去按确定 —— 这正是「只标 1、2 然后什么都不做」。
+                    verify = bool(d.get("modal")) and BADGE_CHECK and kind == "icon" \
+                        and panel_color(img, d["modal"]).mean() < 95
+                    base = len(badge_centers(img, d["photo"])) if verify else 0
+                    partial = False
+                    for i, (x, y) in enumerate(pts):
                         tap(x, y)
                         time.sleep(TAP_GAP)
-                    btn = d.get("confirm") or last_confirm
-                    if btn:
-                        tap(*btn)
-                    tapped = True
-                    res = self.gone(GONE_WAIT)
-                    if res is True:
-                        return "solved", "%s (attempt %d)" % (kind, attempt)
-                    if res:
-                        # 提交后弹出厂商锁: 冷却再战, 不直接判失败
-                        locks += 1
-                        log("submit: %s -> cool down (%d/%d)" % (res, locks, LOCK_MAX))
-                        if locks > LOCK_MAX:
-                            return "fail", "vendor lock persists after submit"
-                        time.sleep(LOCK_WAIT)
-                        if last_refresh:
-                            tap(*last_refresh)
-                        continue
-                    log("%s: still present after submit, refresh & retry" % kind)
-            if attempt > rmax or time.time() >= deadline:
+                        if not verify:
+                            continue
+                        time.sleep(0.25)
+                        try:
+                            seen = len(badge_centers(capture(), d["photo"]))
+                        except Exception:
+                            seen = -1                 # 截屏失败不据此误判
+                        if i == 0 and seen == 0:
+                            # 别的皮肤可能根本不画编号圆标。第一下之后再给一次机会,
+                            # 仍看不到圆标就关掉核对, 按老路径正常提交 —— 绝不能因为
+                            # 检测器不适用而每次都判「残缺」并无限刷新。
+                            time.sleep(0.5)
+                            try:
+                                seen = len(badge_centers(capture(), d["photo"]))
+                            except Exception:
+                                seen = -1
+                            if seen == 0:
+                                log("icon: no numbered markers on this skin, badge check disabled for this attempt")
+                                verify = False
+                                continue
+                        if 0 <= seen < base + i + 1:
+                            log("icon: tap %d/%d not registered (badges %d < %d) -> refresh, no partial submit" %
+                                (i + 1, len(pts), seen, base + i + 1))
+                            partial = True
+                            break
+                    if partial:
+                        log("icon: partial selection discarded, refresh & retry")
+                    else:
+                        btn = self.confirm_button(d, last_confirm)
+                        if btn:
+                            tap(*btn)
+                            log("icon: confirm tap %s (%d/%d icons registered)" % (btn, len(pts), len(pts)))
+                        else:
+                            log("icon: confirm button unknown, proceeding without submit tap")
+                        tapped = True
+                        res = self.gone(GONE_WAIT)
+                        if res is True:
+                            return "solved", "%s (attempt %d)" % (kind, attempt)
+                        if res:
+                            # 提交后弹出厂商锁: 冷却再战, 不直接判失败
+                            locks += 1
+                            log("submit: %s -> cool down (%d/%d)" % (res, locks, LOCK_MAX))
+                            if locks > LOCK_MAX:
+                                return "fail", "vendor lock persists after submit"
+                            time.sleep(LOCK_WAIT)
+                            if last_refresh:
+                                tap(*last_refresh)
+                            continue
+                        log("%s: still present after submit, refresh & retry" % kind)
+            if attempt > rmax or time.monotonic() >= deadline:
                 break
             # 提交/放弃后先确认不是「慢一拍的成功」; 仍在就一律换图 ——
             # 带编号圆标、错误提示或答错的旧题绝不能拿来继续点。
@@ -1224,6 +1339,7 @@ def worker(mode, owner, fin, fout, flag):
     signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))   # 让 finally 删掉 flag 并记下退出
     OWNER = int(owner)
     t0 = time.time()
+    escape_app_cgroup()
     pick_display()
     log("worker start mode=%s owner=%s py=%s display=%s (%.0f ms)" % (mode, owner, sys.version.split()[0], DISPLAY or "default", (time.time() - t0) * 1000))
     ses = Session()
