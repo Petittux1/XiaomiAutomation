@@ -266,6 +266,13 @@ edge_sw() {
   return 1
 }
 
+# 单调秒: /proc/uptime 不随 NTP 校时跳变, 数值小, 32 位 $(( )) 也不溢出。
+# 墙钟 (date +%s) 被 NTP 回拨时, NOW-LAST 变负, 所有节流闸一起冻住 —— 表现为
+# 「app 打开了却一直识别不到」。时间戳只用于节流/耗时, 必须用单调钟。
+ups() {
+  read U _ < /proc/uptime 2>/dev/null
+  if [ -n "$U" ]; then echo "${U%%.*}"; else date +%s; fi
+}
 now_ms() {
   R=$(date +%s%3N 2>/dev/null)
   # 某些 toybox date 不支持 %3N；避免把字面量 N 当成毫秒参与算术。
@@ -504,9 +511,7 @@ _daemon() {
   fi
   CNT=0
   LASTCHK_S=0
-  # 空闲 tick 的时间戳必须用秒 (date +%s, 10 位): 这台设备的 sh 是 32 位,
-  # now_ms 的 13 位毫秒值在 $(( )) 里溢出成负数, 用它做节流会让 tick 永不触发。
-  LASTTICK=$(date +%s)
+  LASTTICK=$(ups)
   # 状态/前台复查: 事件流忙时按行触发, 空闲时由 read -t tick 每秒触发一次。
   # 抽成函数是因为旧版只在 getevent 事件里复查 —— 用户切到目标 app 后手指一停,
   # 事件流就静默, READY 永远翻不过来, 表现为「没识别到 app / 录不到任何动作」。
@@ -604,7 +609,7 @@ _daemon() {
     if [ "$RC" -eq 142 ]; then
       # 空闲 tick: 手指一停事件流就静默, 这里每秒复查一次屏幕/前台,
       # 让「切到目标 app 后停手」也能翻转 READY, 并即时撤销验证码 worker 的 idle。
-      NOW_S=$(date +%s)
+      NOW_S=$(ups)
       if [ $(( NOW_S - LASTTICK )) -ge 1 ]; then
         LASTTICK=$NOW_S
         rec_check
@@ -617,9 +622,9 @@ _daemon() {
       log "RAW$CNT $line"
     fi
     # 事件足够密时按行触发; 行数少(快速滑动只有几十行)时仍由空闲 tick 兜底复查。
-    # 节流用秒计数: 32 位 sh 里 now_ms 的毫秒值会溢出, 12 行除数已提供足够背压。
-    if [ "$CNT" -eq 1 ] || { [ $((CNT % 12)) -eq 0 ] && [ $(( $(date +%s) - LASTCHK_S )) -ge 1 ]; }; then
-      LASTCHK_S=$(date +%s)
+    # 节流用单调秒: 32 位 sh 里毫秒值会溢出, 墙钟会被 NTP 回拨冻住, 12 行除数已提供背压。
+    if [ "$CNT" -eq 1 ] || { [ $((CNT % 12)) -eq 0 ] && [ $(( $(ups) - LASTCHK_S )) -ge 1 ]; }; then
+      LASTCHK_S=$(ups)
       rec_check
     fi
     # 验证码在屏 (worker 建的标志): 暂停录取。按下发生在标志存在期间的手势一律不录
