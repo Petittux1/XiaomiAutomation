@@ -19,6 +19,13 @@ DISPLAY = os.environ.get("CAP_DISPLAY", "")
 LOGF = os.environ.get("CAP_LOG", "")
 REFRESH_MAX = int(os.environ.get("CAP_REFRESH_MAX", "8"))   # 解不出就持续换图, 用完才认输
 REFRESH_GAP = 3.5        # 两次刷新之间至少间隔 (秒), 防厂商「尝试过多」限流
+# 录制模式: 求解在后台跑, 不暂停录取。求解器用 /system/bin/input 注入, 事件走
+# InputManager, 不会出现在 record.sh 监听的 /dev/input/event* 硬件流里 —— 旧闸门
+# 实际丢掉的是用户自己的手势。真机 15:47-15:49: solve() 变成 8 次刷新/240 s 长循环,
+# 闸门全程存在, 用户 20-30 s 的录制整段 Empty。默认关, CAP_RECORD_GATE=1 可恢复旧行为。
+RECORD_GATE = os.environ.get("CAP_RECORD_GATE", "0") != "0"
+RECORD_REFRESH_MAX = int(os.environ.get("CAP_RECORD_REFRESH_MAX", "4"))
+RECORD_SOLVE_BUDGET = float(os.environ.get("CAP_RECORD_SOLVE_BUDGET", "35"))
 LOCK_WAIT = float(os.environ.get("CAP_LOCK_WAIT", "20"))    # 厂商锁冷却 (秒)
 LOCK_MAX = int(os.environ.get("CAP_LOCK_MAX", "3"))         # 最多等几次锁
 SOLVE_BUDGET = float(os.environ.get("CAP_SOLVE_BUDGET", "240"))  # 单次求解总预算 (秒)
@@ -926,19 +933,21 @@ class Session:
                 pass
         return True
 
-    def solve(self, d):
+    def solve(self, d, refresh_max=None, budget=None):
         """持续求解: 直到验证码真的消失才返回 solved, 否则一路刷新换图重试。
         status: solved | fail (预算/次数用尽或厂商锁不退) | skip (不是验证码或不支持)。
         图标没凑齐、分数不够、点到一半、答错 -> 都不点残缺序列, 一律换图重来;
-        只有「真正提交过 + 连续两帧无验证码」才算成功, 换图空白帧绝不算。"""
-        deadline = time.time() + SOLVE_BUDGET
+        只有「真正提交过 + 连续两帧无验证码」才算成功, 换图空白帧绝不算。
+        refresh_max/budget 供录制模式传短预算, 回放默认用全局 8 次 / 240 s。"""
+        rmax = REFRESH_MAX if refresh_max is None else refresh_max
+        deadline = time.time() + (SOLVE_BUDGET if budget is None else budget)
         last_refresh = d.get("refresh")
         last_confirm = d.get("confirm")
         refreshes = 0
         locks = 0
         tapped = False
         attempt = 0
-        while attempt < REFRESH_MAX + 1 and time.time() < deadline:
+        while attempt < rmax + 1 and time.time() < deadline:
             attempt += 1
             t0 = time.time()
             img = capture()
@@ -1009,7 +1018,7 @@ class Session:
                             tap(*last_refresh)
                         continue
                     log("%s: still present after submit, refresh & retry" % kind)
-            if attempt > REFRESH_MAX or time.time() >= deadline:
+            if attempt > rmax or time.time() >= deadline:
                 break
             # 提交/放弃后先确认不是「慢一拍的成功」; 仍在就一律换图 ——
             # 带编号圆标、错误提示或答错的旧题绝不能拿来继续点。
@@ -1129,11 +1138,11 @@ class Throttle:
 def record_loop(ses, flag, idle):
     """录制: 截屏检测。画面不变/录制暂停 (daemon 建 idle 标记) 时退避到 3 s, 出错同样退避且日志限频。
 
-    关键: 一旦建 flag, record.sh 会把期间所有新手势丢掉 (CAPGATE), 所以 flag 的
-    生命周期必须尽量短。旧版只要 detect() 返回非 none 就建 flag, 连自己判定
-    "不是验证码 / 没动手" 的 skip 也要等画面变回 none 才删 —— 动画/过渡帧的一次
-    误报就能吞掉整段录制 (真机日志: icon detected -> skip gone before solving ->
-    REC_STOP empty)。现在双帧确认 + skip 立即恢复 + 等待超时兜底。
+    默认不建 captcha.on 闸门: 求解器用 /system/bin/input 注入, 不进 getevent 硬件流,
+    而 record.sh 的 CAPGATE 看到 flag 会丢弃期间**所有用户手势**。旧版单帧误报就吞掉
+    整段录制; 新版 solve() 又变成 8 次刷新/240 s 长循环, 闸门全程存在, 真机 15:47-15:49
+    四次录制全部 READY 后立刻 Empty。现在求解后台跑、双帧确认防乱刷、录制不中断。
+    CAP_RECORD_GATE=1 可恢复旧闸门行为。
     """
     say = Throttle()
     interval, prev = 0.7, None
@@ -1173,24 +1182,22 @@ def record_loop(ses, flag, idle):
                 interval, prev = 0.7, None
                 time.sleep(max(0.1, interval - (time.time() - t0)))
                 continue
-            open(flag, "w").close()
-            log("record: %s detected, recording paused" % d["kind"])
-            st, why = ses.solve(d)
+            if RECORD_GATE:
+                open(flag, "w").close()
+            log("record: %s detected, solving in background%s" %
+                (d["kind"], " (recording paused)" if RECORD_GATE else " (recording continues)"))
+            # 录制窗口只有几十秒, 给短预算让求解能走完并给出结论; 回放仍用 8 次/240 s。
+            try:
+                st, why = ses.solve(d, refresh_max=RECORD_REFRESH_MAX,
+                                    budget=RECORD_SOLVE_BUDGET)
+            except OwnerGone:
+                raise
+            except Exception as e:
+                st, why = "fail", "solve error %s: %s" % (type(e).__name__, e)
             log("record: %s %s" % (st, why))
-            if st in ("solved", "fail"):
-                # 真的动过手(或被厂商锁)才等画面消失; 25 s 硬超时绝不让录制永久停摆
-                end = time.time() + 25.0
-                while owner_alive() and time.time() < end:
-                    try:
-                        if detect(capture())["kind"] == "none":
-                            break
-                    except Exception:
-                        break
-                    time.sleep(1.0)
-            # skip = 自己判定不是验证码/没动手 -> 立刻恢复录取, 不等画面变化
-            if os.path.exists(flag):
+            if RECORD_GATE and os.path.exists(flag):
                 os.remove(flag)
-            log("record: captcha done (%s), recording resumed" % st)
+            log("record: captcha done (%s)" % st)
             cooldown = time.time() + 1.2
             interval, prev = 0.7, None
         time.sleep(max(0.1, interval - (time.time() - t0)))

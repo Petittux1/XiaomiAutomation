@@ -370,5 +370,82 @@ else:
     check(same, "word plan via cv2 shim == real cv2: %s (%.0f ms incl. model load) %s" % (sp, (time.time() - t0) * 1000, r.stderr.strip()[-160:]))
     os.remove(tmp)
 
+# ---------- 4. 录制闸门后台化 & 录制/回放求解预算分离 ----------
+print("== record loop gating")
+check(C.RECORD_GATE is False,
+      "record: solver runs in background by default (captcha.on gate NOT created)")
+check(C.RECORD_REFRESH_MAX <= 4 and C.RECORD_SOLVE_BUDGET <= 40 and C.REFRESH_MAX == 8,
+      "record: short budget %d refreshes / %.0f s, replay keeps %d / %.0f s" %
+      (C.RECORD_REFRESH_MAX, C.RECORD_SOLVE_BUDGET, C.REFRESH_MAX, C.SOLVE_BUDGET))
+
+_flag = os.path.join(os.environ.get("TMPDIR") or os.environ.get("TEMP") or "/tmp", "cap_gate_test.flag")
+_blank = np.zeros((64, 64, 3), np.uint8)
+
+
+def _one_record_loop(gate):
+    """跑一次双帧确认的 record_loop, 返回 (solve 调用时 flag 是否存在, solve 的关键字参数)。"""
+    try:
+        os.remove(_flag)
+    except OSError:
+        pass
+    ticks = [0]
+
+    class FakeSes:
+        def solve(self, d, **kw):
+            self.seen = os.path.exists(_flag)
+            self.kw = kw
+            return "skip", "mock"
+
+    alive = lambda: ticks.__setitem__(0, ticks[0] + 1) or ticks[0] == 1
+    orig = (C.RECORD_GATE, C.capture, C.detect, C.owner_alive,
+            C.time.sleep, C.log, C.os.path.exists)
+    C.RECORD_GATE = gate
+    C.capture = lambda: _blank
+    C.detect = lambda img: {"kind": "icon"}
+    C.owner_alive = alive
+    C.time.sleep = lambda s: None
+    C.log = lambda *a, **k: None
+    try:
+        f = FakeSes()
+        C.record_loop(f, _flag, "")
+        return f.seen, f.kw
+    finally:
+        (C.RECORD_GATE, C.capture, C.detect, C.owner_alive,
+         C.time.sleep, C.log, C.os.path.exists) = orig
+
+seen, kw = _one_record_loop(False)
+check(seen is False and os.path.exists(_flag) is False,
+      "record: two confirmed icon frames -> NO gate file, user gestures keep recording")
+check(kw.get("refresh_max") == C.RECORD_REFRESH_MAX and kw.get("budget") == C.RECORD_SOLVE_BUDGET,
+      "record: solve() gets short budget %s" % kw)
+seen_gate, _ = _one_record_loop(True)
+check(seen_gate is True and os.path.exists(_flag) is False,
+      "record: CAP_RECORD_GATE=1 restores old gate and always removes it afterwards")
+
+# 短预算确实生效: 一张永远解不开的 weak 帧, refresh_max=2 只刷 2 次就认输
+_clock = [1000.0]
+_refs = []
+_orig = (C.time.time, C.time.sleep, C.capture, C.detect, C.plan_icon,
+         C.photo_sig, C.log, C.Session.refresh)
+C.time.time = lambda: _clock[0]
+C.time.sleep = lambda s: _clock.__setitem__(0, _clock[0] + s)
+C.capture = lambda: _blank
+C.detect = lambda img: {"kind": "icon", "photo": (0, 0, 64, 64), "refresh": (10, 10)}
+C.plan_icon = lambda img, d: (None, {"weak": True, "reason": "test", "cands": 0, "hints": 3})
+C.photo_sig = lambda img, d: "sig"
+C.log = lambda *a, **k: None
+C.Session.refresh = lambda self, btn, before=None: (_refs.append(btn), True)[1]
+try:
+    st, why = C.Session().solve({"kind": "icon"}, refresh_max=2, budget=100000)
+finally:
+    (C.time.time, C.time.sleep, C.capture, C.detect, C.plan_icon,
+     C.photo_sig, C.log, C.Session.refresh) = _orig
+check(st == "fail" and len(_refs) == 2,
+      "Session.solve(refresh_max=2) stops after %d refresh taps (%s)" % (len(_refs), why))
+try:
+    os.remove(_flag)
+except OSError:
+    pass
+
 print("== %s" % ("ALL PASS" if fails == 0 else "%d FAIL" % fails))
 sys.exit(1 if fails else 0)

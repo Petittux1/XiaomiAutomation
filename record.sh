@@ -665,6 +665,20 @@ _daemon() {
       CAP_PAUSE=0
       log "RESUME 验证码已消失, 继续录取"
     fi
+    # 闸门硬上限: 新版 solver 默认不建 flag, 这里只为残留标志 / 旧 worker 兜底。
+    # 用事件行数计时 (不依赖 ups(), 回归第 13 节的 sim 没有该函数): 暂停超过 24 行
+    # 就强制恢复, 绝不再让整段录制被吞掉 (真机 15:47-15:49 四次 REC_STOP empty)。
+    if [ "$CAP_PAUSE" = "1" ]; then
+      CAP_GATE_N=$(( ${CAP_GATE_N:-0} + 1 ))
+      if [ "$CAP_GATE_N" -ge 24 ]; then
+        rm -f "$CAP_FLAG"
+        CAP_PAUSE=0
+        CAP_GATE_N=0
+        log "RESUME 验证码暂停超时, 强制恢复录取"
+      fi
+    else
+      CAP_GATE_N=0
+    fi
     [ "$CAP_PAUSE" = "1" ] && [ $ACTIVE -eq 0 ] && continue
     # ---- CAPGATE_END ----
     [ "$PAUSED" = "1" ] && continue
