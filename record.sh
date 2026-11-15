@@ -340,6 +340,10 @@ put_gesture() {
     FG_NOW=$(fg_pkg)
     if app_fg_ok "$FG_NOW"; then
       :
+    elif [ -z "$FG_NOW" ]; then
+      # 前台解析瞬时返回空 != 用户离开了 app。旧版把空值当 DIFF, 一个手势
+      # 就把 APP_PAUSE 置 1, 之后整段录制停摆 (用户看到「识别不到 app」)。
+      log "PUT_UNKNOWN 抬手瞬间前台解析为空, 保留手势 起点$SX,$SY"
     elif [ "$TOUCH_OK" -eq 1 ] && edge_sw; then
       log "PUT_EDGE 保留左右边缘返回 起点$SX,$SY 前台=$FG_NOW"
       # 返回后先暂停，避免下一次触摸落到上一个页面；回到目标 App 后自动恢复。
@@ -349,9 +353,10 @@ put_gesture() {
     fi
   fi
   if [ $DIFF -eq 1 ]; then
-    APP_PAUSE=1
-    log "PUT_SKIP 手势完成时已离开目标app($PKG) 起点$SX,$SY"
-    log "PAUSE 离开目标app (手势完成复查)"
+    # 只丢这一个手势, 不再直接把 APP_PAUSE 置 1 让后面所有手势都被 continue 掉。
+    # 真离开 app 由 rec_check 连续多次确认后统一暂停, 回到目标 app 自动恢复。
+    MISS=$((MISS+2))
+    log "PUT_SKIP 手势完成时前台=<$FG_NOW> 非目标app($PKG) 起点$SX,$SY"
     return
   fi
   if [ -z "$PTS" ]; then
@@ -579,15 +584,16 @@ _daemon() {
           MISS=0
           ;;
         *)
-          # 空结果或其它包不能证明仍在目标app；连续N次确认才真暂停。
-          # 手势进行中不掐断，等抬手由 put_gesture 精确复查裁决。
-          MISS=$((MISS+1))
-          if [ "$READY" = "1" ] && [ "$APP_PAUSE" = "0" ] && [ $MISS -ge 3 ]; then
+          # 空结果只是 dumpsys 瞬时解析失败, 不能算「离开目标app」(旧版把它计入,
+          # 3 次就把整段录制暂停; 用户表现为「app 明明开着却识别不到」)。
+          # 阈值放宽到 5 次 (~5 s), 容许在 WebUI 与目标 app 之间短暂来回切。
+          if [ -n "$FP" ]; then MISS=$((MISS+1)); fi
+          if [ "$READY" = "1" ] && [ "$APP_PAUSE" = "0" ] && [ $MISS -ge 5 ]; then
             if [ $ACTIVE -eq 1 ]; then
               log "PEND_QUIT 离开确认中但手势未完成, 等抬手裁决 起点$SX,$SY"
             else
               APP_PAUSE=1
-              log "PAUSE 离开目标app (连续$MISS次确认)"
+              log "PAUSE 离开目标app (连续$MISS次确认, 前台=<$FP>)"
             fi
             MISS=0
           fi

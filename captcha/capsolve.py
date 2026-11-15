@@ -587,8 +587,12 @@ def plan_icon(img, d):
     darkp = panel_color(img, d["modal"]).mean() < 95
     cands = icon_candidates(img, d["photo"], sd_max=16 if darkp else 10)
     if not hints or len(cands) < len(hints):
-        # 图里连够数的纯色图标都没有: 多半是带横幅的普通弹窗, 不是验证码 -> 不刷新、不点
-        return None, {"hints": len(hints), "cands": len(cands), "not_captcha": True}
+        # 图标分割没凑够数: 旧版直接判 "不是验证码" 并立刻 return skip,
+        # 一下不点、不刷新、不重试 —— 但真机上 Geetest 暗色面板常有一两个图标
+        # 因半透明/遮挡漏检 (日志: hints=3 cands=2)。这属于「这一帧没看清」,
+        # 不是「这不是验证码」。标 weak 交给 solve() 刷新换图重试; 只有连一个
+        # 纯色图标都没有且刷新多次仍如此, 才由 solve() 最终按 skip 收尾。
+        return None, {"hints": len(hints), "cands": len(cands), "weak": True}
     hp = [polar(m) for m, _ in hints]
     cp = [polar(c[0]) for c in cands]
     Sm = np.array([[polar_sim(a, b) for b in cp] for a in hp])
@@ -820,7 +824,9 @@ class Session:
         """求解已检测到的验证码 -> (status, 说明)。
         status: solved | fail (解不出 / 厂商锁) | skip (不是验证码或不支持, 继续流程)。"""
         kind = d["kind"]
-        acted = False
+        acted = False     # 动过手 (点过/滑过/刷新过): 之后画面消失算解出
+        tapped = False    # 真正对验证码注入过求解输入 (不含刷新)
+        weak = 0          # 图标没看清的帧数: 累计到上限仍没点成 -> 才承认不是验证码
         for attempt in range(REFRESH_MAX + 1):
             t0 = time.time()
             img = capture()
@@ -832,6 +838,7 @@ class Session:
             kind = d["kind"]
             if kind == "slider":
                 acted = True
+                tapped = True
                 ok, why = self.slide(img, d)
                 log("slider attempt %d: %s" % (attempt + 1, why))
                 if ok is True:
@@ -844,10 +851,16 @@ class Session:
                 if info.get("unsupported"):
                     return "skip", "unsupported:%s(%s)" % (kind, info["unsupported"])
                 if info.get("not_captcha") and not acted:
-                    # 结构像但内容不像验证码 (普通弹窗): 一下都不点, 也不刷新
+                    # word: OCR 题头没有「依次点击」句式 -> 确实是普通弹窗, 一下都不点也不刷新
                     return "skip", "%s: not a captcha (%s)" % (kind, ",".join(sorted(k for k in info if k != "not_captcha")))
+                if info.get("weak"):
+                    # icon: 这一帧没看全图标 -> 不放弃, 走下面的刷新换图重试
+                    weak += 1
+                    log("%s: %s icons for %s hints (weak frame %d), refresh & retry" %
+                        (kind, info.get("cands", 0), info.get("hints", 0), weak))
                 if pts:
                     acted = True
+                    tapped = True
                     for (x, y) in pts:
                         tap(x, y)
                         time.sleep(TAP_GAP)
@@ -876,6 +889,9 @@ class Session:
                     acted = True
                     if not self.refresh(d2):
                         time.sleep(REFRESH_GAP)   # 无刷新钮: 多数厂商失败后自动换图
+        if weak and not tapped:
+            # 刷新换图多次仍认不出图标: 这才承认「不是图标验证码」, 让回放继续而不是卡死
+            return "skip", "%s: not a captcha (icons unresolved after %d refreshes)" % (kind, REFRESH_MAX)
         return "fail", "unsolved:%s after %d refreshes" % (kind, REFRESH_MAX)
 
     def gone(self, wait):
@@ -965,9 +981,17 @@ class Throttle:
 
 
 def record_loop(ses, flag, idle):
-    """录制: 截屏检测。画面不变/录制暂停 (daemon 建 idle 标记) 时退避到 3 s, 出错同样退避且日志限频。"""
+    """录制: 截屏检测。画面不变/录制暂停 (daemon 建 idle 标记) 时退避到 3 s, 出错同样退避且日志限频。
+
+    关键: 一旦建 flag, record.sh 会把期间所有新手势丢掉 (CAPGATE), 所以 flag 的
+    生命周期必须尽量短。旧版只要 detect() 返回非 none 就建 flag, 连自己判定
+    "不是验证码 / 没动手" 的 skip 也要等画面变回 none 才删 —— 动画/过渡帧的一次
+    误报就能吞掉整段录制 (真机日志: icon detected -> skip gone before solving ->
+    REC_STOP empty)。现在双帧确认 + skip 立即恢复 + 等待超时兜底。
+    """
     say = Throttle()
     interval, prev = 0.7, None
+    cooldown = 0.0
     while owner_alive():
         t0 = time.time()
         d = {"kind": "none"}
@@ -989,7 +1013,20 @@ def record_loop(ses, flag, idle):
             if not chars:   # 未经题头句式确认的文字点选候选: 不暂停、不点
                 say("word", "record: picture dialog without click-word prompt -> ignored")
                 d = {"kind": "none"}
-        if d["kind"] != "none":
+        if d["kind"] != "none" and time.time() >= cooldown:
+            # 双帧确认: 0.35 s 后复查, 两帧同类型才算真有验证码。单帧误报不建 flag,
+            # 否则「触发验证码的那一下」以及随后所有手势都会被 CAPGATE 丢掉。
+            time.sleep(0.35)
+            try:
+                d2 = detect(capture())
+            except Exception:
+                d2 = {"kind": "none"}
+            if d2["kind"] != d["kind"]:
+                log("record: %s not confirmed on 2nd frame -> ignored (transient)" % d["kind"])
+                cooldown = time.time() + 0.8
+                interval, prev = 0.7, None
+                time.sleep(max(0.1, interval - (time.time() - t0)))
+                continue
             open(flag, "w").close()
             log("record: %s detected, recording paused" % d["kind"])
             if d["kind"] == "locked":
@@ -997,11 +1034,21 @@ def record_loop(ses, flag, idle):
             else:
                 st, why = ses.solve(d)
             log("record: %s %s" % (st, why))
-            # 没解出也要等它消失 (用户可以手动处理), 期间新手势一律不录
-            while owner_alive() and detect(capture())["kind"] != "none":
-                time.sleep(1.0)
-            os.remove(flag)
-            log("record: captcha gone, recording resumed")
+            if st in ("solved", "fail"):
+                # 真的动过手(或被厂商锁)才等画面消失; 25 s 硬超时绝不让录制永久停摆
+                end = time.time() + 25.0
+                while owner_alive() and time.time() < end:
+                    try:
+                        if detect(capture())["kind"] == "none":
+                            break
+                    except Exception:
+                        break
+                    time.sleep(1.0)
+            # skip = 自己判定不是验证码/没动手 -> 立刻恢复录取, 不等画面变化
+            if os.path.exists(flag):
+                os.remove(flag)
+            log("record: captcha done (%s), recording resumed" % st)
+            cooldown = time.time() + 1.2
             interval, prev = 0.7, None
         time.sleep(max(0.1, interval - (time.time() - t0)))
 
